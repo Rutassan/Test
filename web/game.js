@@ -18,6 +18,7 @@ const monsterPanel = document.getElementById('monster-panel');
 const logDiv = document.getElementById('log');
 const statusDiv = document.getElementById('status');
 const effectsSvg = document.getElementById('effects');
+const bannerDiv = document.getElementById('winner-banner');
 
 document.getElementById('play-pause').onclick = () => {
   running = !running;
@@ -77,6 +78,23 @@ function damageNumber(c, amount, heal=false) {
   setTimeout(() => div.remove(), 1000);
 }
 
+function flash(c, type) {
+  c.dom.div.classList.add(type);
+  setTimeout(() => c.dom.div.classList.remove(type), 300 / speed);
+}
+
+function critText(c) {
+  const div = document.createElement('div');
+  div.textContent = 'CRIT!';
+  div.className = 'crit';
+  c.dom.div.appendChild(div);
+  setTimeout(() => div.remove(), 600);
+}
+
+function die(c) {
+  c.dom.div.classList.add('dead');
+}
+
 function lineBetween(a,b) {
   const rectA = a.dom.div.getBoundingClientRect();
   const rectB = b.dom.div.getBoundingClientRect();
@@ -94,14 +112,19 @@ function lineBetween(a,b) {
 function attack(attacker, target) {
   return new Promise(resolve => {
     attacker.dom.div.classList.add('active');
-    const dmg = rand(attacker.attack[0], attacker.attack[1]);
+    let dmg = rand(attacker.attack[0], attacker.attack[1]);
+    const crit = Math.random() < 0.2;
+    if (crit) dmg *= 2;
     moveForward(attacker.dom.div, attacker.dom.div.parentElement === heroesDiv ? 20 : -20)
     .then(() => {
       lineBetween(attacker, target);
       target.hp = Math.max(target.hp - dmg, 0);
       updateChar(target);
+      flash(target, 'hit');
       damageNumber(target, dmg);
-      log(`${attacker.name} hits ${target.name} for ${dmg} dmg. ${target.name} ${target.hp}/${target.maxHp}`);
+      if (crit) critText(target);
+      if (target.hp <= 0) die(target);
+      log(`${attacker.name} hits ${target.name} for ${dmg} dmg${crit ? ' (CRIT!)' : ''}. ${target.name} ${target.hp}/${target.maxHp}`);
       setTimeout(() => {
         attacker.dom.div.classList.remove('active');
         moveForward(attacker.dom.div, 0).then(resolve);
@@ -116,6 +139,7 @@ function heal(c) {
     const amt = rand(1,5);
     c.hp = Math.min(c.hp + amt, c.maxHp);
     updateChar(c);
+    flash(c, 'heal');
     damageNumber(c, amt, true);
     log(`${c.name} heals for ${amt}. ${c.hp}/${c.maxHp}`);
     setTimeout(() => {
@@ -134,6 +158,12 @@ function moveForward(elem, distance) {
   });
 }
 
+function showBanner(text) {
+  statusDiv.textContent = '';
+  bannerDiv.textContent = text;
+  bannerDiv.style.display = 'block';
+}
+
 async function gameLoop() {
   updatePanels();
   statusDiv.textContent = `Round ${round}`;
@@ -142,7 +172,10 @@ async function gameLoop() {
       if (!actor.hp || !running) await waitWhilePaused();
       if (actor.hp <= 0) continue;
       const living = enemies.filter(e => e.hp > 0);
-      if (!living.length) return;
+      if (!living.length) {
+        showBanner(side === heroes ? 'Heroes win!' : 'Monsters win!');
+        return;
+      }
       const target = living[Math.floor(Math.random() * living.length)];
       if (Math.random() < 0.8) await attack(actor, target);
       else await heal(actor);
@@ -151,9 +184,7 @@ async function gameLoop() {
     }
   }
   round++;
-  if (heroes.every(h => h.hp <= 0)) statusDiv.textContent = 'Monsters win!';
-  else if (monsters.every(m => m.hp <= 0)) statusDiv.textContent = 'Heroes win!';
-  else setTimeout(gameLoop, 10);
+  setTimeout(gameLoop, 10);
 }
 
 function waitWhilePaused() {

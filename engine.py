@@ -78,6 +78,11 @@ class Character:
         self.x = 0
         self.y = 0
 
+        # exploration / patrol helpers
+        self.patrol_path = []
+        self.wander_area = None
+        self._patrol_index = 0
+
         # status trackers
         self.poison = 0
         self.poison_turns = 0
@@ -247,6 +252,9 @@ class Character:
         """Default behaviour with simple movement towards target."""
         if not enemies:
             return []
+        kite_ev = game.kite(self, enemies)
+        if kite_ev:
+            return kite_ev
         target = game.select_target(enemies)
         events = []
         dist = game.distance(self, target)
@@ -279,6 +287,9 @@ class Warrior(Character):
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
+        kite_ev = game.kite(self, enemies)
+        if kite_ev:
+            return kite_ev
         target = game.select_target(enemies)
         events = []
         dist = game.distance(self, target)
@@ -356,6 +367,9 @@ class Archer(Character):
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
+        kite_ev = game.kite(self, enemies)
+        if kite_ev:
+            return kite_ev
         target = game.select_target(enemies, ignore_taunt=self.aim)
         events = []
         dist = game.distance(self, target)
@@ -380,6 +394,10 @@ class Priest(Character):
         super().__init__("Priest", 18, (1, 4), "⛪", speed=2, attack_distance=2)
 
     def take_turn(self, allies, enemies, game):
+        if enemies:
+            kite_ev = game.kite(self, enemies)
+            if kite_ev:
+                return kite_ev
         allies_alive = [a for a in allies if a.is_alive()]
         if allies_alive:
             target = min(allies_alive, key=lambda c: c.hp / c.max_hp)
@@ -430,6 +448,10 @@ class Shaman(Character):
         super().__init__("Shaman", 20, (2, 5), "🌀", speed=2, move_points=2, attack_distance=2)
 
     def take_turn(self, allies, enemies, game):
+        if enemies:
+            kite_ev = game.kite(self, enemies)
+            if kite_ev:
+                return kite_ev
         r = random.random()
         allies_alive = [a for a in allies if a.is_alive() and a is not self]
         if r < 0.5 and allies_alive:
@@ -496,6 +518,8 @@ class Game:
         for i, m in enumerate(self.monsters):
             m.x = self.map.width - 1 - (i % 2)
             m.y = i // 2
+            left = max(0, m.x - 4)
+            m.patrol_path = [(m.x, m.y), (left, m.y)]
         self.round = 1
         self.taunt_target = None
         self.arena = random.choice([
@@ -503,6 +527,9 @@ class Game:
             "A cool breeze sweeps across the battlefield.",
             "Thunder rumbles in the distance.",
         ])
+        self.phase = "prebattle"
+        self.aggro_radius = 3
+        self._opp_tracker = {}
         self._event_gen = self._events()
 
     # --- encounter generation ----------------------------------------
@@ -540,6 +567,9 @@ class Game:
     def distance(self, a, b):
         return abs(a.x - b.x) + abs(a.y - b.y)
 
+    def distance_coords(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
     def line_of_sight(self, a, b):
         if a.x == b.x:
             step = 1 if b.y > a.y else -1
@@ -576,6 +606,25 @@ class Game:
         path.reverse()
         return path
 
+    def _check_zoc(self, mover, from_pos, events, tracker):
+        enemies = self.monsters if mover in self.heroes else self.heroes
+        for e in enemies:
+            if not e.is_alive() or e.range > 1:
+                continue
+            if self.distance_coords((e.x, e.y), from_pos) == 1:
+                if e.name in tracker:
+                    continue
+                tracker.add(e.name)
+                dmg = random.randint(*e.attack_range)
+                dmg = int(dmg * e._damage_mod() * 0.5)
+                events.append({
+                    "type": "opportunity_hit",
+                    "attacker_id": e.name,
+                    "defender_id": mover.name,
+                    "dmg": dmg,
+                })
+                events.extend(mover.take_damage(dmg))
+
     def move_unit_towards(self, unit, target):
         start = (unit.x, unit.y)
         blocked = {(c.x, c.y) for c in self.heroes + self.monsters if c.is_alive() and c is not unit}
@@ -584,11 +633,14 @@ class Game:
             return []
         steps = []
         events = []
+        tracker = set()
         for step in path[1:]:
             if len(steps) >= unit.move_points or step == (target.x, target.y):
                 break
-            tile_from = self.map.tile(unit.x, unit.y)
+            from_pos = (unit.x, unit.y)
+            tile_from = self.map.tile(*from_pos)
             events.append({"type": "leave_tile", "unit_id": unit.name, "tile": tile_from})
+            self._check_zoc(unit, from_pos, events, tracker)
             unit.x, unit.y = step
             steps.append({"x": step[0], "y": step[1]})
             tile = self.map.tile(*step)
@@ -620,6 +672,105 @@ class Game:
             return [move_ev] + events
         return []
 
+    def move_unit_to(self, unit, dest):
+        start = (unit.x, unit.y)
+        blocked = {(c.x, c.y) for c in self.heroes + self.monsters if c.is_alive() and c is not unit}
+        path = self.find_path(start, dest, blocked)
+        if not path or len(path) < 2:
+            return []
+        step = path[1]
+        steps = []
+        events = []
+        tracker = set()
+        from_pos = start
+        tile_from = self.map.tile(*from_pos)
+        events.append({"type": "leave_tile", "unit_id": unit.name, "tile": tile_from})
+        self._check_zoc(unit, from_pos, events, tracker)
+        unit.x, unit.y = step
+        steps.append({"x": step[0], "y": step[1]})
+        tile = self.map.tile(*step)
+        applied = None
+        if tile["terrain"] == "hazard_poison":
+            unit.poison = 1
+            unit.poison_turns = 2
+            applied = {"status": "poison", "turns": 2}
+            events.append({"type": "status", "status": "poison", "target": unit.name, "turns": 2})
+        elif tile["terrain"] == "shrine" and (step in self.map.shrines):
+            heal = min(3, unit.max_hp - unit.hp)
+            unit.hp += heal
+            unit.shield += 2
+            self.map.shrines.remove(step)
+            tile["terrain"] = "plain"
+            applied = {"status": "shrine", "heal": heal, "shield": 2}
+            if heal:
+                events.append({"type": "heal", "actor": unit.name, "amount": heal, "hp": unit.hp})
+            events.append({"type": "status", "status": "shield", "target": unit.name, "amount": 2, "remaining": unit.shield})
+        events.append({"type": "enter_tile", "unit_id": unit.name, "tile": tile, "applied_status": applied})
+        move_ev = {
+            "type": "move",
+            "unit_id": unit.name,
+            "from": {"x": start[0], "y": start[1]},
+            "to": {"x": unit.x, "y": unit.y},
+            "path": steps,
+        }
+        return [move_ev] + events
+
+    def move_unit_away(self, unit, enemies):
+        candidates = []
+        for nx, ny in self.map.neighbors(unit.x, unit.y):
+            tile = self.map.tile(nx, ny)
+            if not tile["passable"]:
+                continue
+            if any(c.x == nx and c.y == ny and c.is_alive() for c in self.heroes + self.monsters):
+                continue
+            dist = min(self.distance_coords((nx, ny), (e.x, e.y)) for e in enemies if e.is_alive())
+            candidates.append(((nx, ny), dist))
+        candidates = [c for c in candidates if c[1] > 1]
+        if not candidates:
+            return []
+        dest, _ = max(candidates, key=lambda x: x[1])
+        return self.move_unit_to(unit, dest)
+
+    def kite(self, unit, enemies):
+        if unit.range <= 1:
+            return []
+        if all(self.distance(unit, e) > 1 for e in enemies if e.is_alive()):
+            return []
+        return self.move_unit_away(unit, enemies)
+
+    def check_aggro(self):
+        for h in self.heroes:
+            if not h.is_alive():
+                continue
+            for m in self.monsters:
+                if not m.is_alive():
+                    continue
+                if self.distance(h, m) <= self.aggro_radius and self.line_of_sight(h, m):
+                    return h, m
+        return None, None
+
+    def patrol_step(self, unit):
+        if unit.patrol_path:
+            dest = unit.patrol_path[unit._patrol_index]
+            if (unit.x, unit.y) == dest:
+                unit._patrol_index = (unit._patrol_index + 1) % len(unit.patrol_path)
+                dest = unit.patrol_path[unit._patrol_index]
+            return dest
+        if unit.wander_area:
+            x1, y1, x2, y2 = unit.wander_area
+            opts = []
+            for nx, ny in self.map.neighbors(unit.x, unit.y):
+                if not (x1 <= nx <= x2 and y1 <= ny <= y2):
+                    continue
+                if not self.map.tile(nx, ny)["passable"]:
+                    continue
+                if any(c.x == nx and c.y == ny and c.is_alive() for c in self.heroes + self.monsters):
+                    continue
+                opts.append((nx, ny))
+            if opts:
+                return random.choice(opts)
+        return unit.x, unit.y
+
     def _char_info(self, c):
         return {
             "name": c.name,
@@ -644,6 +795,33 @@ class Game:
             "heroes": [self._char_info(c) for c in self.heroes],
             "monsters": [self._char_info(c) for c in self.monsters],
         }
+        yield {"type": "phase_change", "value": "prebattle"}
+        while self.phase == "prebattle":
+            moved = False
+            for unit in self.heroes + self.monsters:
+                if unit.patrol_path or unit.wander_area:
+                    dest = self.patrol_step(unit)
+                    move_events = self.move_unit_to(unit, dest)
+                    if move_events:
+                        moved = True
+                        mv = move_events[0]
+                        yield {
+                            "type": "patrol_tick",
+                            "unit_id": unit.name,
+                            "from": mv["from"],
+                            "to": mv["to"],
+                        }
+            h, m = self.check_aggro()
+            if h:
+                yield {
+                    "type": "aggro_trigger",
+                    "source_id": h.name,
+                    "target_id": m.name,
+                    "radius": self.aggro_radius,
+                }
+                self.phase = "combat"
+                yield {"type": "phase_change", "value": "combat"}
+                break
         for c in self.heroes + self.monsters:
             if c.regen:
                 yield {"type": "status", "status": "regen", "target": c.name}

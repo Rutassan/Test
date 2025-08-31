@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Auto RPG</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="top-panel">
+        <button id="play">Play</button>
+        <button id="pause">Pause</button>
+        <button id="restart">Restart</button>
+        Speed:
+        <select id="speed">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+        </select>
+        Round: <span id="round">0</span>
+    </div>
+    <div id="arena">
+        <div id="heroes" class="side"></div>
+        <div id="monsters" class="side"></div>
+    </div>
+    <div id="log"></div>
+    <script src="app.js"></script>
+</body>
+</html>

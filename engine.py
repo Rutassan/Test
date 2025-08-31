@@ -1,17 +1,82 @@
 import random
+from collections import deque
+
+
+class Map:
+    """Simple tile map for the battlefield."""
+
+    def __init__(self, width=8, height=5, preset=None):
+        self.width = width
+        self.height = height
+        self.tiles = {}
+        self.shrines = set()
+        presets = {
+            "arena_ruins": {
+                "obstacles": [(3, 1), (4, 3)],
+                "hazards": [(2, 2)],
+                "shrines": [(5, 2)],
+            },
+            "arena_forest": {
+                "obstacles": [(1, 3), (6, 1)],
+                "hazards": [(3, 2)],
+                "shrines": [(4, 4)],
+            },
+            "arena_cavern": {
+                "obstacles": [(3, 0), (3, 1), (4, 3)],
+                "hazards": [(5, 1)],
+                "shrines": [(2, 4)],
+            },
+        }
+        if preset is None:
+            preset = random.choice(list(presets.keys()))
+        layout = presets[preset]
+        for y in range(height):
+            for x in range(width):
+                terrain = "plain"
+                passable = True
+                if (x, y) in layout.get("obstacles", []):
+                    terrain = "obstacle"
+                    passable = False
+                elif (x, y) in layout.get("hazards", []):
+                    terrain = "hazard_poison"
+                elif (x, y) in layout.get("shrines", []):
+                    terrain = "shrine"
+                    self.shrines.add((x, y))
+                self.tiles[(x, y)] = {
+                    "x": x,
+                    "y": y,
+                    "terrain": terrain,
+                    "passable": passable,
+                }
+
+    def tile(self, x, y):
+        return self.tiles.get((x, y))
+
+    def neighbors(self, x, y):
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < self.width and 0 <= ny < self.height:
+                yield nx, ny
 
 
 class Character:
     """Base character with combat utilities and status management."""
 
-    def __init__(self, name, hp, attack_range, icon, speed=1, crit=0.2):
+    def __init__(self, name, hp, attack_range, icon, speed=1, crit=0.2,
+                 move_points=3, attack_distance=1):
         self.name = name
         self.max_hp = hp
         self.hp = hp
+        # attack_range is damage spread (min,max)
         self.attack_range = attack_range
         self.icon = icon
         self.base_speed = speed
         self.base_crit = crit
+        self.move_points = move_points
+        self.range = attack_distance
+        # grid position
+        self.x = 0
+        self.y = 0
 
         # status trackers
         self.poison = 0
@@ -179,13 +244,29 @@ class Character:
 
     # --- AI -------------------------------------------------------------
     def take_turn(self, allies, enemies, game):
-        """Default behaviour: attack most of the time."""
+        """Default behaviour with simple movement towards target."""
         if not enemies:
             return []
-        target = random.choice(enemies)
+        target = game.select_target(enemies)
+        events = []
+        dist = game.distance(self, target)
+        if dist > self.range:
+            events.extend(game.move_unit_towards(self, target))
+            dist = game.distance(self, target)
+            if dist > self.range:
+                return events
+        if self.range > 1 and not game.line_of_sight(self, target):
+            events.append({
+                "type": "los_blocked",
+                "attacker_id": self.name,
+                "target_id": target.name,
+            })
+            return events
         if random.random() < 0.8:
-            return self.attack(target)
-        return self.heal_self()
+            events.extend(self.attack(target))
+        else:
+            events.extend(self.heal_self())
+        return events
 
 
 # --- Hero classes -------------------------------------------------------
@@ -193,41 +274,66 @@ class Character:
 
 class Warrior(Character):
     def __init__(self):
-        super().__init__("Warrior", 30, (4, 8), "⚔️", speed=2)
+        super().__init__("Warrior", 30, (4, 8), "⚔️", speed=2, attack_distance=1)
 
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
+        target = game.select_target(enemies)
+        events = []
+        dist = game.distance(self, target)
+        if dist > self.range:
+            events.extend(game.move_unit_towards(self, target))
+            dist = game.distance(self, target)
+            if dist > self.range:
+                return events
         r = random.random()
         if r < 0.2:
             game.taunt_target = self
-            return [{"type": "status", "status": "taunt", "actor": self.name}]
+            events.append({"type": "status", "status": "taunt", "actor": self.name})
         elif r < 0.9:
-            target = game.select_target(enemies)
-            return self.attack(target)
+            events.extend(self.attack(target))
         else:
-            return self.heal_self()
+            events.extend(self.heal_self())
+        return events
 
 
 class Mage(Character):
     def __init__(self):
-        super().__init__("Mage", 20, (5, 10), "🧙", speed=2)
+        super().__init__("Mage", 20, (5, 10), "🧙", speed=2, attack_distance=3)
 
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
+        target = game.select_target(enemies)
+        events = []
+        dist = game.distance(self, target)
+        if dist > self.range:
+            events.extend(game.move_unit_towards(self, target))
+            dist = game.distance(self, target)
+            if dist > self.range:
+                return events
         r = random.random()
         if r < 0.2 and len(enemies) > 1:
-            events = [{"type": "status", "status": "fireball", "actor": self.name}]
-            targets = random.sample(enemies, 2)
+            if not game.line_of_sight(self, target):
+                events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+                return events
+            events.append({"type": "status", "status": "fireball", "actor": self.name})
+            targets = random.sample(enemies, min(2, len(enemies)))
             for t in targets:
-                events.extend(self.attack(t))
+                if game.line_of_sight(self, t):
+                    events.extend(self.attack(t))
+                else:
+                    events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": t.name})
             return events
         elif r < 0.9:
-            target = game.select_target(enemies)
-            return self.attack(target)
+            if self.range > 1 and not game.line_of_sight(self, target):
+                events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+            else:
+                events.extend(self.attack(target))
         else:
-            return self.heal_self()
+            events.extend(self.heal_self())
+        return events
 
 
 # --- Monster classes ----------------------------------------------------
@@ -235,32 +341,43 @@ class Mage(Character):
 
 class Goblin(Character):
     def __init__(self):
-        super().__init__("Goblin", 15, (3, 6), "👺", speed=2)
+        super().__init__("Goblin", 15, (3, 6), "👺", speed=2, attack_distance=1)
 
 
 class Orc(Character):
     def __init__(self):
-        super().__init__("Orc", 25, (2, 7), "👹", speed=1)
+        super().__init__("Orc", 25, (2, 7), "👹", speed=1, move_points=2, attack_distance=1)
 
 
 class Archer(Character):
     def __init__(self):
-        super().__init__("Archer", 18, (4, 7), "🏹", speed=3, crit=0.25)
+        super().__init__("Archer", 18, (4, 7), "🏹", speed=3, crit=0.25, attack_distance=3)
 
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
+        target = game.select_target(enemies, ignore_taunt=self.aim)
+        events = []
+        dist = game.distance(self, target)
+        if dist > self.range:
+            events.extend(game.move_unit_towards(self, target))
+            dist = game.distance(self, target)
+            if dist > self.range:
+                return events
+        if self.range > 1 and not game.line_of_sight(self, target):
+            events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+            return events
         if self.aim == 0 and random.random() < 0.3:
             self.aim = 1
-            return [{"type": "status", "status": "aim", "actor": self.name, "turns": 1}]
-        target = game.select_target(enemies, ignore_taunt=self.aim)
-        events = self.attack(target)
+            events.append({"type": "status", "status": "aim", "actor": self.name, "turns": 1})
+        else:
+            events.extend(self.attack(target))
         return events
 
 
 class Priest(Character):
     def __init__(self):
-        super().__init__("Priest", 18, (1, 4), "⛪", speed=2)
+        super().__init__("Priest", 18, (1, 4), "⛪", speed=2, attack_distance=2)
 
     def take_turn(self, allies, enemies, game):
         allies_alive = [a for a in allies if a.is_alive()]
@@ -286,19 +403,31 @@ class Priest(Character):
             return events
         # fallback attack
         if enemies:
-            return self.attack(game.select_target(enemies))
+            target = game.select_target(enemies)
+            events = []
+            dist = game.distance(self, target)
+            if dist > self.range:
+                events.extend(game.move_unit_towards(self, target))
+                dist = game.distance(self, target)
+                if dist > self.range:
+                    return events
+            if self.range > 1 and not game.line_of_sight(self, target):
+                events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+                return events
+            events.extend(self.attack(target))
+            return events
         return []
 
 
 class Troll(Character):
     def __init__(self):
-        super().__init__("Troll", 40, (3, 7), "🧌", speed=1)
+        super().__init__("Troll", 40, (3, 7), "🧌", speed=1, move_points=2, attack_distance=1)
         self.regen = 2
 
 
 class Shaman(Character):
     def __init__(self):
-        super().__init__("Shaman", 20, (2, 5), "🌀", speed=2)
+        super().__init__("Shaman", 20, (2, 5), "🌀", speed=2, move_points=2, attack_distance=2)
 
     def take_turn(self, allies, enemies, game):
         r = random.random()
@@ -315,16 +444,39 @@ class Shaman(Character):
             }]
         if r < 0.6 and enemies:
             target = game.select_target(enemies)
+            events = []
+            dist = game.distance(self, target)
+            if dist > self.range:
+                events.extend(game.move_unit_towards(self, target))
+                dist = game.distance(self, target)
+                if dist > self.range:
+                    return events
+            if self.range > 1 and not game.line_of_sight(self, target):
+                events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+                return events
             target.hexed = 1
-            return [{
+            events.append({
                 "type": "status",
                 "status": "hex",
                 "target": target.name,
                 "turns": 1,
                 "actor": self.name,
-            }]
+            })
+            return events
         if enemies:
-            return self.attack(game.select_target(enemies))
+            target = game.select_target(enemies)
+            events = []
+            dist = game.distance(self, target)
+            if dist > self.range:
+                events.extend(game.move_unit_towards(self, target))
+                dist = game.distance(self, target)
+                if dist > self.range:
+                    return events
+            if self.range > 1 and not game.line_of_sight(self, target):
+                events.append({"type": "los_blocked", "attacker_id": self.name, "target_id": target.name})
+                return events
+            events.extend(self.attack(target))
+            return events
         return []
 
 
@@ -334,8 +486,16 @@ class Shaman(Character):
 class Game:
     def __init__(self, tier=1):
         self.tier = tier
+        self.map = Map()
         self.heroes = [Warrior(), Mage()]
         self.monsters = self.generate_encounter()
+        # place units on the map
+        for i, h in enumerate(self.heroes):
+            h.x = i % 2
+            h.y = i // 2
+        for i, m in enumerate(self.monsters):
+            m.x = self.map.width - 1 - (i % 2)
+            m.y = i // 2
         self.round = 1
         self.taunt_target = None
         self.arena = random.choice([
@@ -377,16 +537,107 @@ class Game:
             return self.taunt_target
         return random.choice(living)
 
+    def distance(self, a, b):
+        return abs(a.x - b.x) + abs(a.y - b.y)
+
+    def line_of_sight(self, a, b):
+        if a.x == b.x:
+            step = 1 if b.y > a.y else -1
+            for y in range(a.y + step, b.y, step):
+                if self.map.tile(a.x, y)["terrain"] == "obstacle":
+                    return False
+        elif a.y == b.y:
+            step = 1 if b.x > a.x else -1
+            for x in range(a.x + step, b.x, step):
+                if self.map.tile(x, a.y)["terrain"] == "obstacle":
+                    return False
+        return True
+
+    def find_path(self, start, goal, blocked):
+        queue = deque([start])
+        came = {start: None}
+        while queue:
+            cur = queue.popleft()
+            if cur == goal:
+                break
+            for nx, ny in self.map.neighbors(*cur):
+                if (nx, ny) in blocked and (nx, ny) != goal:
+                    continue
+                if not self.map.tile(nx, ny)["passable"]:
+                    continue
+                if (nx, ny) not in came:
+                    came[(nx, ny)] = cur
+                    queue.append((nx, ny))
+        if goal not in came:
+            return None
+        path = [goal]
+        while path[-1] != start:
+            path.append(came[path[-1]])
+        path.reverse()
+        return path
+
+    def move_unit_towards(self, unit, target):
+        start = (unit.x, unit.y)
+        blocked = {(c.x, c.y) for c in self.heroes + self.monsters if c.is_alive() and c is not unit}
+        path = self.find_path(start, (target.x, target.y), blocked)
+        if not path:
+            return []
+        steps = []
+        events = []
+        for step in path[1:]:
+            if len(steps) >= unit.move_points or step == (target.x, target.y):
+                break
+            tile_from = self.map.tile(unit.x, unit.y)
+            events.append({"type": "leave_tile", "unit_id": unit.name, "tile": tile_from})
+            unit.x, unit.y = step
+            steps.append({"x": step[0], "y": step[1]})
+            tile = self.map.tile(*step)
+            applied = None
+            if tile["terrain"] == "hazard_poison":
+                unit.poison = 1
+                unit.poison_turns = 2
+                applied = {"status": "poison", "turns": 2}
+                events.append({"type": "status", "status": "poison", "target": unit.name, "turns": 2})
+            elif tile["terrain"] == "shrine" and (step in self.map.shrines):
+                heal = min(3, unit.max_hp - unit.hp)
+                unit.hp += heal
+                unit.shield += 2
+                self.map.shrines.remove(step)
+                tile["terrain"] = "plain"
+                applied = {"status": "shrine", "heal": heal, "shield": 2}
+                if heal:
+                    events.append({"type": "heal", "actor": unit.name, "amount": heal, "hp": unit.hp})
+                events.append({"type": "status", "status": "shield", "target": unit.name, "amount": 2, "remaining": unit.shield})
+            events.append({"type": "enter_tile", "unit_id": unit.name, "tile": tile, "applied_status": applied})
+        if steps:
+            move_ev = {
+                "type": "move",
+                "unit_id": unit.name,
+                "from": {"x": start[0], "y": start[1]},
+                "to": {"x": unit.x, "y": unit.y},
+                "path": steps,
+            }
+            return [move_ev] + events
+        return []
+
     def _char_info(self, c):
         return {
             "name": c.name,
             "hp": c.hp,
             "max_hp": c.max_hp,
             "icon": c.icon,
+            "x": c.x,
+            "y": c.y,
         }
 
     # --- event stream --------------------------------------------------
     def _events(self):
+        yield {
+            "type": "map_init",
+            "width": self.map.width,
+            "height": self.map.height,
+            "tiles": list(self.map.tiles.values()),
+        }
         yield {
             "type": "start",
             "arena": self.arena,

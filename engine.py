@@ -79,13 +79,13 @@ class Character:
         })
         events.extend(other.take_damage(dmg))
         if random.random() < 0.1 and other.is_alive():
-            other.poison = 2
+            other.poison = random.randint(1, 3)
             other.poison_turns = 3
             events.append({
                 "type": "status",
                 "status": "poison",
                 "target": other.name,
-                "amount": 2,
+                "amount": other.poison,
                 "turns": 3
             })
         return events
@@ -124,7 +124,11 @@ class Game:
         ]
         self.round = 1
         self.taunt_target = None
-        self.arena = random.choice(["grassy field", "stone arena", "dark dungeon"])
+        self.arena = random.choice([
+            "The fight takes place in an abandoned ruin.",
+            "A cool breeze sweeps across the battlefield.",
+            "Thunder rumbles in the distance." 
+        ])
         self._event_gen = self._events()
 
     def _char_info(self, c):

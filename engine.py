@@ -580,9 +580,9 @@ class Game:
         self.round = 1
         self.taunt_target = None
         self.arena = random.choice([
-            "The fight takes place in an abandoned ruin.",
-            "A cool breeze sweeps across the battlefield.",
-            "Thunder rumbles in the distance.",
+            "arena.ruins",
+            "arena.forest",
+            "arena.cave",
         ])
         self.phase = "prebattle"
         self.aggro_radius = 3

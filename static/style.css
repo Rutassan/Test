@@ -5,6 +5,8 @@ body { font-family: sans-serif; margin:0; background:#222; color:#eee; }
 .side-banner { padding:2px 8px; }
 .side-banner.heroes { border:2px solid #0ff; }
 .side-banner.monsters { border:2px solid #f60; }
+#mission-panel { border:2px solid #909; padding:4px; text-align:center; }
+#mission-title { font-weight:bold; }
 #arena { display:flex; justify-content:center; margin:20px; }
 #map { position:relative; display:grid; }
 .map.no-grid .tile { border:none; }

@@ -11,6 +11,10 @@ let initiative = [];
 let fireball = null;
 let currentRunId = null;
 let nextAbortController = null;
+let state = 'idle'; // idle, running, paused, finished
+const playBtn = document.getElementById('play');
+const pauseBtn = document.getElementById('pause');
+pauseBtn.disabled = true;
 
 function log(msg, cls = '') {
   const div = document.createElement('div');
@@ -189,19 +193,20 @@ function handleEvent(ev) {
       banner.id = 'banner';
       banner.textContent = `${ev.winner} win!`;
       document.body.appendChild(banner);
+      pause();
+      state = 'finished';
       break;
   }
 }
 
 function fetchNext() {
-  if (!currentRunId) return;
+  if (!currentRunId || state !== 'running') return;
   nextAbortController = new AbortController();
   fetch('/next?runId=' + encodeURIComponent(currentRunId), { signal: nextAbortController.signal })
     .then(r => r.json())
     .then(ev => {
-      if (!ev || ev.runId !== currentRunId) { pause(); return; }
+      if (state !== 'running' || !ev || ev.runId !== currentRunId) return;
       handleEvent(ev);
-      if (ev.type === 'end') pause();
     })
     .catch(() => {});
 }
@@ -225,24 +230,30 @@ function start(auto = true) {
     if (auto) {
       resume();
     } else {
-      document.getElementById('play').disabled = false;
-      document.getElementById('pause').disabled = true;
+      state = 'paused';
+      playBtn.disabled = false;
+      pauseBtn.disabled = true;
     }
   });
 }
 
 function resume() {
+  if (!currentRunId) return;
   if (timer) clearInterval(timer);
   timer = setInterval(fetchNext, 1000 / speed);
-  document.getElementById('play').disabled = true;
-  document.getElementById('pause').disabled = false;
+  state = 'running';
+  playBtn.disabled = true;
+  pauseBtn.disabled = false;
+  fetchNext();
 }
 
 function pause() {
   if (timer) clearInterval(timer);
   timer = null;
-  document.getElementById('pause').disabled = true;
-  document.getElementById('play').disabled = false;
+  if (nextAbortController) nextAbortController.abort();
+  state = 'paused';
+  pauseBtn.disabled = true;
+  playBtn.disabled = false;
 }
 
 function restart() {
@@ -255,8 +266,30 @@ function setSpeed(s) {
   speed = Number(s);
   if (timer) resume();
 }
+function play() {
+  if (state === 'idle' || state === 'finished') {
+    start();
+  } else if (state === 'paused') {
+    resume();
+  }
+}
 
-document.getElementById('play').addEventListener('click', start);
-document.getElementById('pause').addEventListener('click', pause);
+function debounceButton(btn, computeDisabled) {
+  btn.disabled = true;
+  setTimeout(() => { btn.disabled = computeDisabled(); }, 300);
+}
+
+playBtn.addEventListener('click', () => {
+  if (playBtn.disabled) return;
+  debounceButton(playBtn, () => state === 'running');
+  play();
+});
+
+pauseBtn.addEventListener('click', () => {
+  if (pauseBtn.disabled) return;
+  debounceButton(pauseBtn, () => state !== 'running');
+  pause();
+});
+
 document.getElementById('restart').addEventListener('click', restart);
 document.getElementById('speed').addEventListener('change', e => setSpeed(e.target.value));

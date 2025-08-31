@@ -1,5 +1,5 @@
-const heroesEl = document.getElementById('heroes');
-const monstersEl = document.getElementById('monsters');
+const mapEl = document.getElementById('map');
+const toggleGridBtn = document.getElementById('toggle-grid');
 const logEl = document.getElementById('log');
 const roundEl = document.getElementById('round');
 const initEl = document.getElementById('initiative');
@@ -15,6 +15,12 @@ let state = 'idle'; // idle, running, paused, finished
 const playBtn = document.getElementById('play');
 const pauseBtn = document.getElementById('pause');
 pauseBtn.disabled = true;
+
+const TILE_SIZE = 64;
+let mapWidth = 0;
+let mapHeight = 0;
+const tiles = {};
+let movedActor = null;
 
 function log(msg, cls = '') {
   const div = document.createElement('div');
@@ -42,18 +48,60 @@ function renderInitiative() {
   });
 }
 
-function setup(sideEl, chars) {
-  sideEl.innerHTML = '';
+function renderMap(width, height, tileData) {
+  mapWidth = width;
+  mapHeight = height;
+  mapEl.innerHTML = '';
+  mapEl.style.gridTemplateColumns = `repeat(${width}, ${TILE_SIZE}px)`;
+  mapEl.style.gridTemplateRows = `repeat(${height}, ${TILE_SIZE}px)`;
+  tileData.forEach(t => {
+    tiles[`${t.x},${t.y}`] = t;
+    const div = document.createElement('div');
+    div.className = `tile ${t.terrain}`;
+    div.id = `tile-${t.x}-${t.y}`;
+    let symbol = '.';
+    if (t.terrain === 'obstacle') symbol = '■';
+    else if (t.terrain === 'hazard_poison') symbol = '☠';
+    else if (t.terrain === 'shrine') symbol = '✚';
+    div.textContent = symbol;
+    mapEl.appendChild(div);
+  });
+}
+
+function setupChars(chars) {
   chars.forEach(c => {
     characters[c.name] = { ...c, statuses: {} };
     const div = document.createElement('div');
     div.className = 'char';
     div.id = 'char-' + c.name;
-    div.innerHTML = `<div class="icon">${c.icon}</div><div>${c.name}</div><div class="hp-bar"><div class="hp"></div></div><div class="status-icons"></div>`;
-    sideEl.appendChild(div);
+    div.innerHTML = `<div class="icon">${c.icon}</div><div class="hp-bar"><div class="hp"></div></div><div class="status-icons"></div>`;
+    mapEl.appendChild(div);
+    placeChar(c.name, c.x, c.y);
     updateHp(c.name, c.hp);
     updateStatuses(c.name);
   });
+}
+
+function placeChar(name, x, y) {
+  const el = document.getElementById('char-' + name);
+  el.style.left = (x * TILE_SIZE) + 'px';
+  el.style.top = (y * TILE_SIZE) + 'px';
+  characters[name].x = x;
+  characters[name].y = y;
+}
+
+function animateMove(name, path) {
+  let i = 0;
+  function step() {
+    if (i >= path.length) return;
+    const pos = path[i];
+    placeChar(name, pos.x, pos.y);
+    i++;
+    if (i < path.length) {
+      setTimeout(step, 300 / speed);
+    }
+  }
+  step();
 }
 
 function updateHp(name, hp) {
@@ -116,10 +164,20 @@ function shiftInitiative(name) {
 
 function handleEvent(ev) {
   if (!ev || (ev.runId && ev.runId !== currentRunId)) return;
+  const actor = ev.attacker || ev.actor || ev.unit_id;
+  if (movedActor && actor !== movedActor) {
+    shiftInitiative(movedActor);
+    movedActor = null;
+  } else if (movedActor && !actor) {
+    shiftInitiative(movedActor);
+    movedActor = null;
+  }
   switch (ev.type) {
+    case 'map_init':
+      renderMap(ev.width, ev.height, ev.tiles);
+      break;
     case 'start':
-      setup(heroesEl, ev.heroes);
-      setup(monstersEl, ev.monsters);
+      setupChars(ev.heroes.concat(ev.monsters));
       log(ev.arena);
       break;
     case 'round':
@@ -129,6 +187,33 @@ function handleEvent(ev) {
       Object.keys(characters).forEach(n => { delete characters[n].statuses.taunt; updateStatuses(n); });
       renderInitiative();
       break;
+    case 'move':
+      log(`${ev.unit_id} moves from (${ev.from.x},${ev.from.y}) → (${ev.to.x},${ev.to.y})`);
+      animateMove(ev.unit_id, ev.path);
+      movedActor = ev.unit_id;
+      break;
+    case 'enter_tile': {
+      const tile = ev.tile;
+      const el = document.getElementById('char-' + ev.unit_id);
+      if (ev.applied_status && ev.applied_status.status === 'poison') {
+        el.classList.add('trap');
+        setTimeout(() => el.classList.remove('trap'), 300);
+        log(`${ev.unit_id} steps on hazard: Poison applied!`, 'log-damage');
+      } else if (ev.applied_status && ev.applied_status.status === 'shrine') {
+        el.classList.add('shrine');
+        const sh = document.createElement('div');
+        sh.className = 'shield-effect';
+        sh.textContent = '🛡️';
+        el.appendChild(sh);
+        setTimeout(() => el.classList.remove('shrine'), 300);
+        const heal = ev.applied_status.heal || 0;
+        const shield = ev.applied_status.shield || 0;
+        log(`${ev.unit_id} enters shrine: +${heal} HP, +${shield} shield`, 'log-heal');
+        const tileEl = document.getElementById(`tile-${tile.x}-${tile.y}`);
+        if (tileEl) { tileEl.className = 'tile plain'; tileEl.textContent = '.'; }
+      }
+      break;
+    }
     case 'attack':
       log(`${ev.attacker} hits ${ev.target} for ${ev.damage}${ev.crit ? ' (crit!)' : ''}`, 'log-damage');
       if (fireball && fireball.actor === ev.attacker) {
@@ -141,6 +226,7 @@ function handleEvent(ev) {
       } else {
         shiftInitiative(ev.attacker);
       }
+      movedActor = null;
       break;
     case 'damage':
       updateHp(ev.target, ev.hp);
@@ -163,6 +249,7 @@ function handleEvent(ev) {
         log(`${ev.actor} heals ${ev.amount}`, 'log-heal');
       }
       shiftInitiative(ev.actor);
+      movedActor = null;
       break;
     case 'status': {
       const name = ev.target || ev.actor;
@@ -188,6 +275,7 @@ function handleEvent(ev) {
           log(`${ev.actor} uses Taunt!`);
           showAbilityBanner();
           shiftInitiative(ev.actor);
+          movedActor = null;
           break;
         case 'fireball':
           log(`${ev.actor} casts Fireball!`, 'log-damage');
@@ -200,18 +288,21 @@ function handleEvent(ev) {
           log(`${name} takes aim`, 'log-buff');
           showAbilityBanner('Archer aims...');
           shiftInitiative(ev.actor);
+          movedActor = null;
           break;
         case 'frenzy':
           characters[name].statuses.frenzy = ev.turns;
           updateStatuses(name);
           log(`${name} is frenzied`, 'log-buff');
           shiftInitiative(ev.actor);
+          movedActor = null;
           break;
         case 'hex':
           characters[name].statuses.hex = ev.turns;
           updateStatuses(name);
           log(`${name} is hexed`, 'log-debuff');
           shiftInitiative(ev.actor);
+          movedActor = null;
           break;
         case 'regen':
           characters[name].statuses.regen = 1;
@@ -230,6 +321,8 @@ function handleEvent(ev) {
       break;
     case 'death':
       log(`${ev.target} dies`, 'log-death');
+      const d = document.getElementById('char-' + ev.target);
+      if (d) { d.style.transition = 'opacity 0.5s'; d.style.opacity = '0'; setTimeout(() => d.remove(), 500); }
       break;
     case 'passive_tick':
       if (ev.status === 'regen') {
@@ -271,6 +364,7 @@ function start(auto = true) {
     initiative = [];
     fireball = null;
     for (const k in characters) delete characters[k];
+    movedActor = null;
     document.getElementById('banner')?.remove();
     if (!auto) {
       speed = 1;
@@ -343,3 +437,6 @@ pauseBtn.addEventListener('click', () => {
 
 document.getElementById('restart').addEventListener('click', restart);
 document.getElementById('speed').addEventListener('change', e => setSpeed(e.target.value));
+toggleGridBtn.addEventListener('click', () => {
+  mapEl.classList.toggle('no-grid');
+});

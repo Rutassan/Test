@@ -1,10 +1,16 @@
 body { font-family: sans-serif; margin:0; background:#222; color:#eee; }
 #top-panel { background:#444; padding:10px; }
-#arena { display:flex; justify-content:space-between; margin:20px; }
-.side { width:45%; display:flex; flex-direction:column; align-items:center; }
-.char { text-align:center; margin:10px; position:relative; border:2px solid transparent; }
+#arena { display:flex; justify-content:center; margin:20px; }
+#map { position:relative; display:grid; }
+.map.no-grid .tile { border:none; }
+.tile { width:64px; height:64px; border:1px solid #444; display:flex; align-items:center; justify-content:center; }
+.tile.plain { background:#222; color:#555; }
+.tile.obstacle { background:#555; }
+.tile.hazard_poison { background:#505; }
+.tile.shrine { background:#030; color:#0f0; }
+.char { text-align:center; position:absolute; border:2px solid transparent; transition:top 0.3s,left 0.3s; }
 .char .icon { font-size:64px; }
-.hp-bar { width:80px; height:10px; background:#555; margin-top:4px; }
+.hp-bar { width:60px; height:10px; background:#555; margin-top:4px; }
 .hp { background:#0f0; height:100%; }
 .dead .icon { opacity:0.4; }
 .status-icons { height:20px; margin-top:4px; }
@@ -21,5 +27,11 @@ body { font-family: sans-serif; margin:0; background:#222; color:#eee; }
 .log-debuff { color:#f6a; }
 .flash { animation:flash 0.3s; }
 @keyframes flash { from { background:rgba(255,0,0,0.5); } to { background:transparent; } }
+.char.trap { animation:trapflash 0.3s; }
+@keyframes trapflash { from { background:rgba(255,0,0,0.5); } to { background:transparent; } }
+.char.shrine { animation:shrineflash 0.3s; }
+@keyframes shrineflash { from { background:rgba(0,255,0,0.5); } to { background:transparent; } }
+.shield-effect { position:absolute; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; animation:shieldfade 0.3s forwards; }
+@keyframes shieldfade { from { opacity:1; } to { opacity:0; } }
 .ability-banner { position:fixed; top:30%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; font-size:24px; border:2px solid #fff; }
 #banner { position:fixed; top:40%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; font-size:24px; border:2px solid #fff; }

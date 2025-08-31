@@ -285,6 +285,10 @@ function handleEvent(ev) {
       showAbilityBanner(mtitle);
       log(mtitle);
       break;
+    case 'objective_target':
+      const objEl = document.getElementById('char-' + ev.id);
+      if (objEl) objEl.classList.add('objective');
+      break;
     case 'objective_progress':
       if (mission === 'capture_point') {
         missionData.progress = ev.progress;

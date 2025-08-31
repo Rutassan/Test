@@ -255,7 +255,7 @@ class Character:
         kite_ev = game.kite(self, enemies)
         if kite_ev:
             return kite_ev
-        target = game.select_target(enemies)
+        target = game.select_target(self, enemies)
         events = []
         dist = game.distance(self, target)
         if dist > self.range:
@@ -290,7 +290,7 @@ class Warrior(Character):
         kite_ev = game.kite(self, enemies)
         if kite_ev:
             return kite_ev
-        target = game.select_target(enemies)
+        target = game.select_target(self, enemies)
         events = []
         dist = game.distance(self, target)
         if dist > self.range:
@@ -316,7 +316,7 @@ class Mage(Character):
     def take_turn(self, allies, enemies, game):
         if not enemies:
             return []
-        target = game.select_target(enemies)
+        target = game.select_target(self, enemies)
         events = []
         dist = game.distance(self, target)
         if dist > self.range:
@@ -370,7 +370,7 @@ class Archer(Character):
         kite_ev = game.kite(self, enemies)
         if kite_ev:
             return kite_ev
-        target = game.select_target(enemies, ignore_taunt=self.aim)
+        target = game.select_target(self, enemies, ignore_taunt=self.aim)
         events = []
         dist = game.distance(self, target)
         if dist > self.range:
@@ -421,7 +421,7 @@ class Priest(Character):
             return events
         # fallback attack
         if enemies:
-            target = game.select_target(enemies)
+            target = game.select_target(self, enemies)
             events = []
             dist = game.distance(self, target)
             if dist > self.range:
@@ -465,7 +465,7 @@ class Shaman(Character):
                 "actor": self.name,
             }]
         if r < 0.6 and enemies:
-            target = game.select_target(enemies)
+            target = game.select_target(self, enemies)
             events = []
             dist = game.distance(self, target)
             if dist > self.range:
@@ -486,7 +486,7 @@ class Shaman(Character):
             })
             return events
         if enemies:
-            target = game.select_target(enemies)
+            target = game.select_target(self, enemies)
             events = []
             dist = game.distance(self, target)
             if dist > self.range:
@@ -508,7 +508,8 @@ class EnemyShrine(Character):
     """Immobile structure used for destroy_shrine missions."""
 
     def __init__(self, hp=20):
-        super().__init__("Enemy Shrine", hp, (0, 0), "🏯", speed=0, move_points=0, attack_distance=1)
+        # use simple id without spaces so frontend ids remain valid
+        super().__init__("shrine", hp, (0, 0), "🏯", speed=0, move_points=0, attack_distance=1)
 
     def take_turn(self, allies, enemies, game):
         # Shrine does nothing on its turn
@@ -562,6 +563,10 @@ class Game:
             # place shrine near enemy side
             self.shrine.x = self.map.width - 2
             self.shrine.y = self.map.height // 2
+            # make the shrine tile impassable so units stop adjacent
+            tile = self.map.tile(self.shrine.x, self.shrine.y)
+            tile["terrain"] = "enemy_shrine"
+            tile["passable"] = False
             self.monsters = [self.shrine]
         else:
             self.monsters = self.generate_encounter()
@@ -613,10 +618,25 @@ class Game:
         return mons
 
     # --- util ----------------------------------------------------------
-    def select_target(self, enemies, ignore_taunt=False):
+    def select_target(self, actor, enemies, ignore_taunt=False):
         living = [e for e in enemies if e.is_alive()]
         if not living:
             return None
+        # mission specific priority for destroying shrine
+        if self.mission == "destroy_shrine" and self.shrine and self.shrine in living:
+            blocked = {
+                (c.x, c.y)
+                for c in self.heroes + self.monsters
+                if c.is_alive() and c is not actor
+            }
+            path = self.find_path((actor.x, actor.y), (self.shrine.x, self.shrine.y), blocked)
+            if path:
+                return self.shrine
+            # shrine unreachable – focus blocker
+            others = [e for e in living if e is not self.shrine]
+            if others:
+                return min(others, key=lambda e: self.distance(actor, e))
+            return self.shrine
         if not ignore_taunt and self.taunt_target and self.taunt_target in living:
             return self.taunt_target
         return random.choice(living)
@@ -650,7 +670,7 @@ class Game:
             for nx, ny in self.map.neighbors(*cur):
                 if (nx, ny) in blocked and (nx, ny) != goal:
                     continue
-                if not self.map.tile(nx, ny)["passable"]:
+                if not self.map.tile(nx, ny)["passable"] and (nx, ny) != goal:
                     continue
                 if (nx, ny) not in came:
                     came[(nx, ny)] = cur
@@ -686,14 +706,15 @@ class Game:
         start = (unit.x, unit.y)
         blocked = {(c.x, c.y) for c in self.heroes + self.monsters if c.is_alive() and c is not unit}
         path = self.find_path(start, (target.x, target.y), blocked)
-        if not path:
+        if not path or len(path) <= 1:
             return []
+        # stop before the target tile so adjacent attackers can strike
+        path = path[:-1]
+        path = path[1:1 + unit.move_points]
         steps = []
         events = []
         tracker = set()
-        for step in path[1:]:
-            if len(steps) >= unit.move_points or step == (target.x, target.y):
-                break
+        for step in path:
             from_pos = (unit.x, unit.y)
             tile_from = self.map.tile(*from_pos)
             events.append({"type": "leave_tile", "unit_id": unit.name, "tile": tile_from})
@@ -866,6 +887,15 @@ class Game:
             }
         return {"type": "objective_init", "mission": self.mission, "data": data}
 
+    def _objective_target_event(self):
+        if self.mission == "destroy_shrine" and self.shrine:
+            return {
+                "type": "objective_target",
+                "id": self.shrine.name,
+                "pos": {"x": self.shrine.x, "y": self.shrine.y},
+            }
+        return None
+
     def _objective_on_move(self, unit):
         events = []
         if self.mission == "escort" and self.vip and unit is self.vip:
@@ -962,33 +992,40 @@ class Game:
             "monsters": [self._char_info(c) for c in self.monsters],
         }
         yield self._objective_init_event()
-        yield {"type": "phase_change", "value": "prebattle"}
-        while self.phase == "prebattle":
-            moved = False
-            for unit in self.heroes + self.monsters:
-                if unit.patrol_path or unit.wander_area:
-                    dest = self.patrol_step(unit)
-                    move_events = self.move_unit_to(unit, dest)
-                    if move_events:
-                        moved = True
-                        mv = move_events[0]
-                        yield {
-                            "type": "patrol_tick",
-                            "unit_id": unit.name,
-                            "from": mv["from"],
-                            "to": mv["to"],
-                        }
-            h, m = self.check_aggro()
-            if h:
-                yield {
-                    "type": "aggro_trigger",
-                    "source_id": h.name,
-                    "target_id": m.name,
-                    "radius": self.aggro_radius,
-                }
-                self.phase = "combat"
-                yield {"type": "phase_change", "value": "combat"}
-                break
+        target_ev = self._objective_target_event()
+        if target_ev:
+            yield target_ev
+        if self.mission == "destroy_shrine":
+            self.phase = "combat"
+            yield {"type": "phase_change", "value": "combat"}
+        else:
+            yield {"type": "phase_change", "value": "prebattle"}
+            while self.phase == "prebattle":
+                moved = False
+                for unit in self.heroes + self.monsters:
+                    if unit.patrol_path or unit.wander_area:
+                        dest = self.patrol_step(unit)
+                        move_events = self.move_unit_to(unit, dest)
+                        if move_events:
+                            moved = True
+                            mv = move_events[0]
+                            yield {
+                                "type": "patrol_tick",
+                                "unit_id": unit.name,
+                                "from": mv["from"],
+                                "to": mv["to"],
+                            }
+                h, m = self.check_aggro()
+                if h:
+                    yield {
+                        "type": "aggro_trigger",
+                        "source_id": h.name,
+                        "target_id": m.name,
+                        "radius": self.aggro_radius,
+                    }
+                    self.phase = "combat"
+                    yield {"type": "phase_change", "value": "combat"}
+                    break
         for c in self.heroes + self.monsters:
             if c.regen:
                 yield {"type": "status", "status": "regen", "target": c.name}

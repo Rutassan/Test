@@ -1,6 +1,7 @@
 import random
 import sys
 import time
+from colorama import Fore, Style, init
 
 class Character:
     def __init__(self, name, hp, attack_range):
@@ -39,20 +40,30 @@ class Character:
             if absorbed:
                 print(f"{self.name}'s shield absorbs {absorbed} damage.")
         self.hp = max(self.hp - dmg, 0)
+        if dmg > 0:
+            print(Fore.RED + "*** RED FLASH ***" + Style.RESET_ALL)
+        if self.hp == 0:
+            anim = random.choice(["slowly falls to the ground...", "dissolves into mist..."])
+            print(f"{self.name} {anim}")
 
     def attack(self, other):
+        print(f"{self.name} steps forward.")
+        time.sleep(0.1)
         dmg = random.randint(*self.attack_range)
         if self.rage > 0:
             dmg = int(dmg * 1.5)
         crit = random.random() < 0.2
         if crit:
             dmg *= 2
+            print(Fore.YELLOW + Style.BRIGHT + "\n===== CRIT! =====\n" + Style.RESET_ALL)
         other.take_damage(dmg)
         msg = f"{self.name} hits {other.name} for {dmg} damage."
         if crit:
             msg += " Critical hit!"
         msg += f" {other.name} has {other.hp}/{other.max_hp} HP left."
         print(msg)
+        print(f"{self.name} steps back.")
+        time.sleep(0.1)
         # 10% chance to poison
         if random.random() < 0.1 and other.is_alive():
             other.poison = 2
@@ -62,6 +73,7 @@ class Character:
     def heal(self):
         amt = random.randint(1, 5)
         self.hp = min(self.hp + amt, self.max_hp)
+        print(Fore.GREEN + "*** GREEN FLASH ***" + Style.RESET_ALL)
         msg = f"{self.name} heals for {amt} HP. {self.hp}/{self.max_hp} HP now."
         # 30% chance to gain a small shield when healing
         if random.random() < 0.3:
@@ -83,6 +95,7 @@ class Game:
         self.round = 1
         self.taunt_target = None
         self.speed = speed
+        self.arena = random.choice(["grassy field", "stone arena", "dark dungeon"])
 
     def step(self):
         print(f"\n-- Round {self.round} --")
@@ -143,11 +156,14 @@ class Game:
         return None
 
     def play(self):
-        print("A battle begins! Heroes vs Monsters. Sit back and watch...\n")
+        print(f"A battle begins in a {self.arena}! Heroes vs Monsters. Sit back and watch...\n")
         while not self.winner():
             self.step()
-        print(f"\n{self.winner()} win the day!")
+        winner = self.winner()
+        banner = f" {winner} win the day! "
+        print(Fore.CYAN + Style.BRIGHT + banner.center(50, '=') + Style.RESET_ALL)
 
 if __name__ == "__main__":
+    init(autoreset=True)
     speed = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
     Game(speed=speed).play()

@@ -502,24 +502,81 @@ class Shaman(Character):
         return []
 
 
+# --- Objective helpers --------------------------------------------------
+
+class EnemyShrine(Character):
+    """Immobile structure used for destroy_shrine missions."""
+
+    def __init__(self, hp=20):
+        super().__init__("Enemy Shrine", hp, (0, 0), "🏯", speed=0, move_points=0, attack_distance=1)
+
+    def take_turn(self, allies, enemies, game):
+        # Shrine does nothing on its turn
+        return []
+
+
 # --- Game engine --------------------------------------------------------
 
 
 class Game:
-    def __init__(self, tier=1):
+    def __init__(self, tier=1, mission=None):
         self.tier = tier
         self.map = Map()
+        # heroes and monsters
         self.heroes = [Warrior(), Mage()]
-        self.monsters = self.generate_encounter()
+        self.mission = mission or random.choice([
+            "capture_point",
+            "escort",
+            "survival",
+            "destroy_shrine",
+        ])
+        # mission specific setup
+        self.objective_complete = False
+        self.objective_failed = None
+        self.objective_progress = 0
+        self.objective_required = 0
+        self.control_point = None
+        self.vip = None
+        self.exit_tile = None
+        self.survival_rounds = 0
+        self.wave_interval = 3
+        self.shrine = None
+
+        if self.mission == "escort":
+            # add a priest VIP and exit tile
+            self.vip = Priest()
+            self.heroes.append(self.vip)
+            self.exit_tile = (self.map.width - 1, self.map.height - 1)
+            tile = self.map.tile(*self.exit_tile)
+            tile["terrain"] = "exit"
+        if self.mission == "capture_point":
+            self.control_point = (self.map.width // 2, self.map.height // 2)
+            tile = self.map.tile(*self.control_point)
+            tile["terrain"] = "control_point"
+            self.objective_required = 3
+        if self.mission == "survival":
+            self.survival_rounds = 10
+            self.objective_required = self.survival_rounds
+        if self.mission == "destroy_shrine":
+            self.shrine = EnemyShrine(20)
+            # place shrine near enemy side
+            self.shrine.x = self.map.width - 2
+            self.shrine.y = self.map.height // 2
+            self.monsters = [self.shrine]
+        else:
+            self.monsters = self.generate_encounter()
+
         # place units on the map
         for i, h in enumerate(self.heroes):
             h.x = i % 2
             h.y = i // 2
-        for i, m in enumerate(self.monsters):
-            m.x = self.map.width - 1 - (i % 2)
-            m.y = i // 2
-            left = max(0, m.x - 4)
-            m.patrol_path = [(m.x, m.y), (left, m.y)]
+        if self.mission != "destroy_shrine":
+            for i, m in enumerate(self.monsters):
+                m.x = self.map.width - 1 - (i % 2)
+                m.y = i // 2
+                left = max(0, m.x - 4)
+                m.patrol_path = [(m.x, m.y), (left, m.y)]
+
         self.round = 1
         self.taunt_target = None
         self.arena = random.choice([
@@ -661,6 +718,7 @@ class Game:
                     events.append({"type": "heal", "actor": unit.name, "amount": heal, "hp": unit.hp})
                 events.append({"type": "status", "status": "shield", "target": unit.name, "amount": 2, "remaining": unit.shield})
             events.append({"type": "enter_tile", "unit_id": unit.name, "tile": tile, "applied_status": applied})
+            events.extend(self._objective_on_move(unit))
         if steps:
             move_ev = {
                 "type": "move",
@@ -706,6 +764,7 @@ class Game:
                 events.append({"type": "heal", "actor": unit.name, "amount": heal, "hp": unit.hp})
             events.append({"type": "status", "status": "shield", "target": unit.name, "amount": 2, "remaining": unit.shield})
         events.append({"type": "enter_tile", "unit_id": unit.name, "tile": tile, "applied_status": applied})
+        events.extend(self._objective_on_move(unit))
         move_ev = {
             "type": "move",
             "unit_id": unit.name,
@@ -781,6 +840,113 @@ class Game:
             "y": c.y,
         }
 
+    # --- objective system ---------------------------------------------
+
+    def _objective_init_event(self):
+        data = {}
+        if self.mission == "capture_point" and self.control_point:
+            data = {
+                "tiles": [{"x": self.control_point[0], "y": self.control_point[1]}],
+                "required": self.objective_required,
+            }
+        elif self.mission == "escort" and self.vip and self.exit_tile:
+            data = {
+                "vip": self.vip.name,
+                "exit": {"x": self.exit_tile[0], "y": self.exit_tile[1]},
+            }
+        elif self.mission == "survival":
+            data = {"rounds": self.survival_rounds, "wave_interval": self.wave_interval}
+        elif self.mission == "destroy_shrine" and self.shrine:
+            data = {
+                "shrine": {
+                    "x": self.shrine.x,
+                    "y": self.shrine.y,
+                    "hp": self.shrine.hp,
+                }
+            }
+        return {"type": "objective_init", "mission": self.mission, "data": data}
+
+    def _objective_on_move(self, unit):
+        events = []
+        if self.mission == "escort" and self.vip and unit is self.vip:
+            if (unit.x, unit.y) == self.exit_tile:
+                self.objective_complete = True
+                events.append({"type": "objective_complete", "mission": self.mission})
+        return events
+
+    def _objective_process_event(self, ev):
+        if self.mission == "escort" and ev.get("type") == "death" and ev.get("target") == (self.vip.name if self.vip else None):
+            self.objective_failed = True
+            return [{"type": "objective_fail", "mission": self.mission}]
+        if self.mission == "destroy_shrine" and self.shrine:
+            if ev.get("type") == "damage" and ev.get("target") == self.shrine.name:
+                progress = self.shrine.max_hp - self.shrine.hp
+                return [{
+                    "type": "objective_progress",
+                    "mission": self.mission,
+                    "progress": progress,
+                    "required": self.shrine.max_hp,
+                }]
+            if ev.get("type") == "death" and ev.get("target") == self.shrine.name:
+                self.objective_complete = True
+                return [{"type": "objective_complete", "mission": self.mission}]
+        return []
+
+    def _objective_round_end(self):
+        events = []
+        if self.mission == "capture_point" and self.control_point:
+            holder = None
+            for h in self.heroes:
+                if h.is_alive() and (h.x, h.y) == self.control_point:
+                    holder = h
+                    break
+            occupied_by_enemy = any(
+                m.is_alive() and (m.x, m.y) == self.control_point for m in self.monsters
+            )
+            if holder and not occupied_by_enemy:
+                self.objective_progress += 1
+                events.append({
+                    "type": "objective_progress",
+                    "mission": self.mission,
+                    "holder": holder.name,
+                    "progress": self.objective_progress,
+                    "required": self.objective_required,
+                })
+                if self.objective_progress >= self.objective_required:
+                    self.objective_complete = True
+                    events.append({"type": "objective_complete", "mission": self.mission})
+            elif self.objective_progress:
+                self.objective_progress = 0
+                events.append({
+                    "type": "objective_progress",
+                    "mission": self.mission,
+                    "progress": 0,
+                    "required": self.objective_required,
+                })
+        if self.mission == "survival":
+            self.objective_progress += 1
+            events.append({
+                "type": "objective_progress",
+                "mission": self.mission,
+                "progress": self.objective_progress,
+                "required": self.objective_required,
+            })
+            if self.objective_progress >= self.objective_required:
+                self.objective_complete = True
+                events.append({"type": "objective_complete", "mission": self.mission})
+            elif self.objective_progress % self.wave_interval == 0:
+                # spawn a simple goblin at enemy edge
+                g = Goblin()
+                g.x = self.map.width - 1
+                g.y = random.randrange(self.map.height)
+                self.monsters.append(g)
+                events.append({
+                    "type": "wave_spawn",
+                    "round": self.round,
+                    "monsters": [self._char_info(g)],
+                })
+        return events
+
     # --- event stream --------------------------------------------------
     def _events(self):
         yield {
@@ -795,6 +961,7 @@ class Game:
             "heroes": [self._char_info(c) for c in self.heroes],
             "monsters": [self._char_info(c) for c in self.monsters],
         }
+        yield self._objective_init_event()
         yield {"type": "phase_change", "value": "prebattle"}
         while self.phase == "prebattle":
             moved = False
@@ -845,22 +1012,36 @@ class Game:
             enemies = self.monsters if side is self.heroes else self.heroes
             for ev in actor.begin_turn():
                 yield ev
+                for oev in self._objective_process_event(ev):
+                    yield oev
             if not actor.is_alive() or not enemies:
                 continue
             events = actor.take_turn(side, [e for e in enemies if e.is_alive()], self)
             for ev in events:
                 yield ev
+                for oev in self._objective_process_event(ev):
+                    yield oev
                 if self.winner():
                     return
             for ev in actor.end_turn():
                 yield ev
-            if self.winner():
-                return
+                for oev in self._objective_process_event(ev):
+                    yield oev
+                if self.winner():
+                    return
             if actor is self.taunt_target and actor is not side:
                 self.taunt_target = None
         self.round += 1
+        for ev in self._objective_round_end():
+            yield ev
+            if self.winner():
+                return
 
     def winner(self):
+        if self.objective_complete:
+            return "Heroes"
+        if self.objective_failed:
+            return "Monsters"
         if all(not m.is_alive() for m in self.monsters):
             return "Heroes"
         if all(not h.is_alive() for h in self.heroes):

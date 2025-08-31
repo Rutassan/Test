@@ -4,6 +4,9 @@ const logEl = document.getElementById('log');
 const roundLabel = document.getElementById('round-label');
 const heroesBanner = document.getElementById('heroes-banner');
 const monstersBanner = document.getElementById('monsters-banner');
+const missionTitle = document.getElementById('mission-title');
+const missionDesc = document.getElementById('mission-desc');
+const missionProgress = document.getElementById('mission-progress');
 let lang = 'ru';
 let strings = {};
 const initEl = document.getElementById('initiative');
@@ -23,6 +26,8 @@ pauseBtn.disabled = true;
 let totalHeroes = 0;
 let totalMonsters = 0;
 let currentRound = 0;
+let mission = null;
+let missionData = {};
 
 function t(key, params = {}) {
   let str = strings[key] || key;
@@ -40,6 +45,7 @@ function updateUITexts() {
   document.querySelector('[data-i18n="ui.speed"]').textContent = t('ui.speed');
   roundLabel.textContent = t('ui.round', { n: currentRound });
   updateBanners();
+  updateMission();
 }
 
 function loadLang(l) {
@@ -64,7 +70,7 @@ function log(msg, cls = '') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function showAbilityBanner(text = 'Special Ability!') {
+function showAbilityBanner(text = t('ability.special')) {
   const banner = document.createElement('div');
   banner.className = 'ability-banner';
   banner.textContent = text;
@@ -128,6 +134,29 @@ function updateBanners() {
   const monstersAlive = Object.values(characters).filter(c => c.side === 'monsters' && c.hp > 0).length;
   heroesBanner.textContent = `${t('ui.sides.heroes')} (${heroesAlive}/${totalHeroes})`;
   monstersBanner.textContent = `${t('ui.sides.monsters')} (${monstersAlive}/${totalMonsters})`;
+}
+
+function updateMission() {
+  if (!mission) return;
+  const title = t('mission.title', { name: t(`mission.${mission}.name`) });
+  missionTitle.textContent = title;
+  if (mission === 'capture_point') {
+    missionDesc.textContent = t(`mission.${mission}.desc`, { need: missionData.required });
+    missionProgress.textContent = t(`mission.${mission}.progress`, { p: missionData.progress || 0, need: missionData.required });
+  } else if (mission === 'escort') {
+    missionDesc.textContent = t(`mission.${mission}.desc`);
+    if (missionData.done) {
+      missionProgress.textContent = t('mission.escort.done');
+    } else {
+      missionProgress.textContent = t(`mission.${mission}.progress`, { hp: missionData.hp, max: missionData.max });
+    }
+  } else if (mission === 'survival') {
+    missionDesc.textContent = t(`mission.${mission}.desc`, { need: missionData.required });
+    missionProgress.textContent = t(`mission.${mission}.progress`, { cur: missionData.progress || 0, need: missionData.required });
+  } else if (mission === 'destroy_shrine') {
+    missionDesc.textContent = t(`mission.${mission}.desc`);
+    missionProgress.textContent = t(`mission.${mission}.progress`, { hp: missionData.hp, max: missionData.max });
+  }
 }
 
 function placeChar(name, x, y) {
@@ -227,9 +256,51 @@ function handleEvent(ev) {
       break;
     case 'start':
       setupChars(ev.heroes, ev.monsters);
-      log(ev.arena);
+      log(t('log.start'));
+      log(t(ev.arena));
       currentRound = 1;
       roundLabel.textContent = t('ui.round', { n: currentRound });
+      break;
+    case 'objective_init':
+      mission = ev.mission;
+      missionData = {};
+      if (mission === 'capture_point') {
+        missionData.required = ev.data.required;
+        missionData.progress = 0;
+      } else if (mission === 'escort') {
+        missionData.vip = ev.data.vip;
+        const vip = characters[missionData.vip];
+        missionData.max = vip.max_hp;
+        missionData.hp = vip.hp;
+        missionData.done = false;
+      } else if (mission === 'survival') {
+        missionData.required = ev.data.rounds;
+        missionData.progress = 0;
+      } else if (mission === 'destroy_shrine') {
+        missionData.max = ev.data.shrine.hp;
+        missionData.hp = ev.data.shrine.hp;
+      }
+      updateMission();
+      const mtitle = t('mission.title', { name: t(`mission.${mission}.name`) });
+      showAbilityBanner(mtitle);
+      log(mtitle);
+      break;
+    case 'objective_progress':
+      if (mission === 'capture_point') {
+        missionData.progress = ev.progress;
+      } else if (mission === 'survival') {
+        missionData.progress = ev.progress;
+      } else if (mission === 'destroy_shrine') {
+        missionData.hp = ev.required - ev.progress;
+      }
+      updateMission();
+      showAbilityBanner(t('mission.update'));
+      break;
+    case 'objective_complete':
+      if (mission === 'escort') {
+        missionData.done = true;
+        updateMission();
+      }
       break;
     case 'round':
       currentRound = ev.round;
@@ -250,7 +321,7 @@ function handleEvent(ev) {
       if (ev.applied_status && ev.applied_status.status === 'poison') {
         el.classList.add('trap');
         setTimeout(() => el.classList.remove('trap'), 300);
-        log(`${ev.unit_id} steps on hazard: Poison applied!`, 'log-damage');
+        log(t('log.trap.poison', { a: ev.unit_id }), 'log-damage');
       } else if (ev.applied_status && ev.applied_status.status === 'shrine') {
         el.classList.add('shrine');
         const sh = document.createElement('div');
@@ -260,14 +331,14 @@ function handleEvent(ev) {
         setTimeout(() => el.classList.remove('shrine'), 300);
         const heal = ev.applied_status.heal || 0;
         const shield = ev.applied_status.shield || 0;
-        log(`${ev.unit_id} enters shrine: +${heal} HP, +${shield} shield`, 'log-heal');
+        log(t('log.shrine.enter', { a: ev.unit_id, heal, shield }), 'log-heal');
         const tileEl = document.getElementById(`tile-${tile.x}-${tile.y}`);
         if (tileEl) { tileEl.className = 'tile plain'; tileEl.textContent = '.'; }
       }
       break;
     }
     case 'attack':
-      log(t('log.attack', { a: ev.attacker, b: ev.target, dmg: ev.damage }) + (ev.crit ? ' (crit!)' : ''), 'log-damage');
+      log(t('log.attack', { a: ev.attacker, b: ev.target, dmg: ev.damage }) + (ev.crit ? ' (' + t('log.crit') + ')' : ''), 'log-damage');
       if (fireball && fireball.actor === ev.attacker) {
         flash(ev.target);
         fireball.remaining--;
@@ -283,7 +354,7 @@ function handleEvent(ev) {
     case 'damage':
       updateHp(ev.target, ev.hp);
       if (ev.source === 'poison') {
-        log(`${ev.target} takes ${ev.amount} poison damage`, 'log-damage');
+        log(t('log.damage.poison', { a: ev.target, dmg: ev.amount }), 'log-damage');
         const st = characters[ev.target].statuses;
         if (st.poison) {
           st.poison--;
@@ -291,12 +362,20 @@ function handleEvent(ev) {
           updateStatuses(ev.target);
         }
       }
+      if (mission === 'escort' && missionData.vip === ev.target) {
+        missionData.hp = ev.hp;
+        updateMission();
+      }
       break;
     case 'heal':
       const tgt = ev.target || ev.actor;
       updateHp(tgt, ev.hp);
       const healText = t('log.heal', { a: ev.actor, b: tgt, amt: ev.amount });
       log(healText, 'log-heal');
+      if (mission === 'escort' && missionData.vip === tgt) {
+        missionData.hp = ev.hp;
+        updateMission();
+      }
       shiftInitiative(ev.actor);
       movedActor = null;
       break;
@@ -306,50 +385,50 @@ function handleEvent(ev) {
         case 'poison':
           characters[name].statuses.poison = ev.turns;
           updateStatuses(name);
-          log(`${name} is poisoned`, 'log-damage');
+          log(t('status.poison', { a: name }), 'log-damage');
           break;
         case 'shield':
           characters[name].statuses.shield = ev.remaining;
           updateStatuses(name);
-          log(`${name} gains a shield`, 'log-heal');
+          log(t('status.shield', { a: name }), 'log-heal');
           break;
         case 'rage':
           characters[name].statuses.rage = 3;
           updateStatuses(name);
-          log(`${name} is enraged!`, 'log-damage');
+           log(t('status.rage', { a: name }), 'log-damage');
           break;
         case 'taunt':
           characters[ev.actor].statuses.taunt = 1;
           updateStatuses(ev.actor);
-          log(`${ev.actor} uses Taunt!`);
-          showAbilityBanner();
+          log(t('status.taunt', { a: ev.actor }));
+          showAbilityBanner(t('ability.taunt'));
           shiftInitiative(ev.actor);
           movedActor = null;
           break;
         case 'fireball':
-          log(`${ev.actor} casts Fireball!`, 'log-damage');
-          showAbilityBanner();
+          log(t('status.fireball', { a: ev.actor }), 'log-damage');
+          showAbilityBanner(t('ability.fireball'));
           fireball = { actor: ev.actor, remaining: 2 };
           break;
         case 'aim':
           characters[name].statuses.aim = ev.turns || 1;
           updateStatuses(name);
-          log(`${name} takes aim`, 'log-buff');
-          showAbilityBanner('Archer aims...');
+          log(t('status.aim', { a: name }), 'log-buff');
+          showAbilityBanner(t('ability.aim'));
           shiftInitiative(ev.actor);
           movedActor = null;
           break;
         case 'frenzy':
           characters[name].statuses.frenzy = ev.turns;
           updateStatuses(name);
-          log(`${name} is frenzied`, 'log-buff');
+          log(t('status.frenzy', { a: name }), 'log-buff');
           shiftInitiative(ev.actor);
           movedActor = null;
           break;
         case 'hex':
           characters[name].statuses.hex = ev.turns;
           updateStatuses(name);
-          log(`${name} is hexed`, 'log-debuff');
+          log(t('status.hex', { a: name }), 'log-debuff');
           shiftInitiative(ev.actor);
           movedActor = null;
           break;
@@ -376,7 +455,7 @@ function handleEvent(ev) {
     case 'passive_tick':
       if (ev.status === 'regen') {
         updateHp(ev.target, ev.hp);
-        log(`${ev.target} regenerates ${ev.amount}`, 'log-heal');
+        log(t('status.regen', { a: ev.target, amt: ev.amount }), 'log-heal');
       }
       break;
     case 'end':
@@ -417,6 +496,11 @@ function start(auto = true) {
     fireball = null;
     for (const k in characters) delete characters[k];
     movedActor = null;
+    mission = null;
+    missionData = {};
+    missionTitle.textContent = '';
+    missionDesc.textContent = '';
+    missionProgress.textContent = '';
     document.getElementById('banner')?.remove();
     if (!auto) {
       speed = 1;

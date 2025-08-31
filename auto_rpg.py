@@ -1,4 +1,5 @@
 import random
+import sys
 import time
 
 class Character:
@@ -43,8 +44,15 @@ class Character:
         dmg = random.randint(*self.attack_range)
         if self.rage > 0:
             dmg = int(dmg * 1.5)
+        crit = random.random() < 0.2
+        if crit:
+            dmg *= 2
         other.take_damage(dmg)
-        print(f"{self.name} hits {other.name} for {dmg} damage. {other.name} has {other.hp}/{other.max_hp} HP left.")
+        msg = f"{self.name} hits {other.name} for {dmg} damage."
+        if crit:
+            msg += " Critical hit!"
+        msg += f" {other.name} has {other.hp}/{other.max_hp} HP left."
+        print(msg)
         # 10% chance to poison
         if random.random() < 0.1 and other.is_alive():
             other.poison = 2
@@ -63,7 +71,7 @@ class Character:
         print(msg)
 
 class Game:
-    def __init__(self):
+    def __init__(self, speed=1.0):
         self.heroes = [
             Character("Warrior", 30, (4, 8)),
             Character("Mage", 20, (5, 10)),
@@ -74,9 +82,12 @@ class Game:
         ]
         self.round = 1
         self.taunt_target = None
+        self.speed = speed
 
     def step(self):
         print(f"\n-- Round {self.round} --")
+        initiative = [c.name for c in self.heroes + self.monsters if c.is_alive()]
+        print("Turn order: " + ", ".join(initiative))
         for side, enemies in ((self.heroes, self.monsters), (self.monsters, self.heroes)):
             for actor in side:
                 if not actor.is_alive():
@@ -118,7 +129,7 @@ class Game:
                         actor.attack(target)
                     else:
                         actor.heal()
-                time.sleep(0.3)
+                time.sleep(0.3 / self.speed)
             # reset taunt after monsters finish their turn
             if side is self.monsters:
                 self.taunt_target = None
@@ -138,4 +149,5 @@ class Game:
         print(f"\n{self.winner()} win the day!")
 
 if __name__ == "__main__":
-    Game().play()
+    speed = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
+    Game(speed=speed).play()

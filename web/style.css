@@ -25,6 +25,17 @@ body {
     #333 25px 50px
   );
 }
+
+#initiative {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+#initiative span {
+  font-size: 1.5rem;
+}
 .side {
   flex: 1;
   display: flex;
@@ -55,6 +66,15 @@ body {
 .hp-bar-inner {
   background: #0f0;
   height: 100%;
+}
+.statuses {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  font-size: 0.8rem;
 }
 .damage {
   position: absolute;

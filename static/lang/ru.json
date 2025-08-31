@@ -1,0 +1,16 @@
+{
+  "ui.play": "Играть",
+  "ui.pause": "Пауза",
+  "ui.restart": "Перезапуск",
+  "ui.grid.toggle": "Сетка",
+  "ui.speed": "Скорость:",
+  "ui.sides.heroes": "Герои",
+  "ui.sides.monsters": "Монстры",
+  "ui.round": "Раунд {n}",
+  "ui.victory.heroes": "Герои победили!",
+  "ui.victory.monsters": "Монстры победили!",
+  "log.attack": "{a} бьёт {b} на {dmg}",
+  "log.heal": "{a} лечит {b} на {amt}",
+  "log.death": "{a} погибает",
+  "log.move": "{a} перемещается {from} → {to}"
+}

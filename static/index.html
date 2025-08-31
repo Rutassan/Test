@@ -7,17 +7,24 @@
 </head>
 <body>
     <div id="top-panel">
-        <button id="play">Play</button>
-        <button id="pause">Pause</button>
-        <button id="restart">Restart</button>
-        <button id="toggle-grid">Toggle Grid</button>
-        Speed:
-        <select id="speed">
-            <option value="1">1x</option>
-            <option value="2">2x</option>
-            <option value="4">4x</option>
-        </select>
-        Round: <span id="round">0</span>
+        <div id="controls">
+            <button id="play" data-i18n="ui.play">Play</button>
+            <button id="pause" data-i18n="ui.pause">Pause</button>
+            <button id="restart" data-i18n="ui.restart">Restart</button>
+            <button id="toggle-grid" data-i18n="ui.grid.toggle">Toggle Grid</button>
+            <span data-i18n="ui.speed">Speed:</span>
+            <select id="speed">
+                <option value="1">1x</option>
+                <option value="2">2x</option>
+                <option value="4">4x</option>
+            </select>
+            <div id="lang-switch"><button data-lang="ru">RU</button> | <button data-lang="en">EN</button></div>
+        </div>
+        <div id="banners">
+            <div id="heroes-banner" class="side-banner heroes"></div>
+            <div id="monsters-banner" class="side-banner monsters"></div>
+        </div>
+        <div id="round-label">Round 0</div>
     </div>
     <div id="arena">
         <div id="map" class="map"></div>

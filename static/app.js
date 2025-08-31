@@ -1,7 +1,11 @@
 const mapEl = document.getElementById('map');
 const toggleGridBtn = document.getElementById('toggle-grid');
 const logEl = document.getElementById('log');
-const roundEl = document.getElementById('round');
+const roundLabel = document.getElementById('round-label');
+const heroesBanner = document.getElementById('heroes-banner');
+const monstersBanner = document.getElementById('monsters-banner');
+let lang = 'ru';
+let strings = {};
 const initEl = document.getElementById('initiative');
 
 let timer = null;
@@ -15,6 +19,36 @@ let state = 'idle'; // idle, running, paused, finished
 const playBtn = document.getElementById('play');
 const pauseBtn = document.getElementById('pause');
 pauseBtn.disabled = true;
+
+let totalHeroes = 0;
+let totalMonsters = 0;
+let currentRound = 0;
+
+function t(key, params = {}) {
+  let str = strings[key] || key;
+  Object.keys(params).forEach(k => {
+    str = str.replace(new RegExp(`{${k}}`, 'g'), params[k]);
+  });
+  return str;
+}
+
+function updateUITexts() {
+  playBtn.textContent = t('ui.play');
+  pauseBtn.textContent = t('ui.pause');
+  document.getElementById('restart').textContent = t('ui.restart');
+  toggleGridBtn.textContent = t('ui.grid.toggle');
+  document.querySelector('[data-i18n="ui.speed"]').textContent = t('ui.speed');
+  roundLabel.textContent = t('ui.round', { n: currentRound });
+  updateBanners();
+}
+
+function loadLang(l) {
+  fetch('lang/' + l + '.json').then(r => r.json()).then(d => {
+    strings = d;
+    lang = l;
+    updateUITexts();
+  });
+}
 
 const TILE_SIZE = 64;
 let mapWidth = 0;
@@ -68,18 +102,32 @@ function renderMap(width, height, tileData) {
   });
 }
 
-function setupChars(chars) {
-  chars.forEach(c => {
-    characters[c.name] = { ...c, statuses: {} };
-    const div = document.createElement('div');
-    div.className = 'char';
-    div.id = 'char-' + c.name;
-    div.innerHTML = `<div class="icon">${c.icon}</div><div class="hp-bar"><div class="hp"></div></div><div class="status-icons"></div>`;
-    mapEl.appendChild(div);
-    placeChar(c.name, c.x, c.y);
-    updateHp(c.name, c.hp);
-    updateStatuses(c.name);
-  });
+function addChar(c, side) {
+  characters[c.name] = { ...c, statuses: {}, side };
+  const div = document.createElement('div');
+  div.className = 'char ' + (side === 'heroes' ? 'hero' : 'monster');
+  div.id = 'char-' + c.name;
+  const badge = side === 'heroes' ? 'H' : 'M';
+  div.innerHTML = `<div class="badge">${badge}</div><div class="icon">${c.icon}</div><div class="hp-bar"><div class="hp"></div></div><div class="status-icons"></div>`;
+  mapEl.appendChild(div);
+  placeChar(c.name, c.x, c.y);
+  updateHp(c.name, c.hp);
+  updateStatuses(c.name);
+}
+
+function setupChars(heroes, monsters) {
+  totalHeroes = heroes.length;
+  totalMonsters = monsters.length;
+  heroes.forEach(c => addChar(c, 'heroes'));
+  monsters.forEach(c => addChar(c, 'monsters'));
+  updateBanners();
+}
+
+function updateBanners() {
+  const heroesAlive = Object.values(characters).filter(c => c.side === 'heroes' && c.hp > 0).length;
+  const monstersAlive = Object.values(characters).filter(c => c.side === 'monsters' && c.hp > 0).length;
+  heroesBanner.textContent = `${t('ui.sides.heroes')} (${heroesAlive}/${totalHeroes})`;
+  monstersBanner.textContent = `${t('ui.sides.monsters')} (${monstersAlive}/${totalMonsters})`;
 }
 
 function placeChar(name, x, y) {
@@ -112,6 +160,7 @@ function updateHp(name, hp) {
   if (hp <= 0) {
     document.getElementById('char-' + name).classList.add('dead');
   }
+  updateBanners();
 }
 
 function updateStatuses(name) {
@@ -177,18 +226,21 @@ function handleEvent(ev) {
       renderMap(ev.width, ev.height, ev.tiles);
       break;
     case 'start':
-      setupChars(ev.heroes.concat(ev.monsters));
+      setupChars(ev.heroes, ev.monsters);
       log(ev.arena);
+      currentRound = 1;
+      roundLabel.textContent = t('ui.round', { n: currentRound });
       break;
     case 'round':
-      roundEl.textContent = ev.round;
-      log('Round ' + ev.round);
+      currentRound = ev.round;
+      roundLabel.textContent = t('ui.round', { n: currentRound });
+      log(t('ui.round', { n: currentRound }));
       initiative = ev.order.slice();
       Object.keys(characters).forEach(n => { delete characters[n].statuses.taunt; updateStatuses(n); });
       renderInitiative();
       break;
     case 'move':
-      log(`${ev.unit_id} moves from (${ev.from.x},${ev.from.y}) → (${ev.to.x},${ev.to.y})`);
+      log(t('log.move', { a: ev.unit_id, from: `(${ev.from.x},${ev.from.y})`, to: `(${ev.to.x},${ev.to.y})` }));
       animateMove(ev.unit_id, ev.path);
       movedActor = ev.unit_id;
       break;
@@ -215,7 +267,7 @@ function handleEvent(ev) {
       break;
     }
     case 'attack':
-      log(`${ev.attacker} hits ${ev.target} for ${ev.damage}${ev.crit ? ' (crit!)' : ''}`, 'log-damage');
+      log(t('log.attack', { a: ev.attacker, b: ev.target, dmg: ev.damage }) + (ev.crit ? ' (crit!)' : ''), 'log-damage');
       if (fireball && fireball.actor === ev.attacker) {
         flash(ev.target);
         fireball.remaining--;
@@ -243,11 +295,8 @@ function handleEvent(ev) {
     case 'heal':
       const tgt = ev.target || ev.actor;
       updateHp(tgt, ev.hp);
-      if (ev.target && ev.target !== ev.actor) {
-        log(`${ev.actor} heals ${ev.target} for ${ev.amount}`, 'log-heal');
-      } else {
-        log(`${ev.actor} heals ${ev.amount}`, 'log-heal');
-      }
+      const healText = t('log.heal', { a: ev.actor, b: tgt, amt: ev.amount });
+      log(healText, 'log-heal');
       shiftInitiative(ev.actor);
       movedActor = null;
       break;
@@ -320,7 +369,7 @@ function handleEvent(ev) {
       updateStatuses(ev.target);
       break;
     case 'death':
-      log(`${ev.target} dies`, 'log-death');
+      log(t('log.death', { a: ev.target }), 'log-death');
       const d = document.getElementById('char-' + ev.target);
       if (d) { d.style.transition = 'opacity 0.5s'; d.style.opacity = '0'; setTimeout(() => d.remove(), 500); }
       break;
@@ -331,10 +380,12 @@ function handleEvent(ev) {
       }
       break;
     case 'end':
-      log(`${ev.winner} win!`);
+      const key = ev.winner === 'Heroes' ? 'ui.victory.heroes' : 'ui.victory.monsters';
+      const text = t(key);
+      log(text);
       const banner = document.createElement('div');
       banner.id = 'banner';
-      banner.textContent = `${ev.winner} win!`;
+      banner.textContent = text;
       document.body.appendChild(banner);
       pause();
       state = 'finished';
@@ -360,7 +411,8 @@ function start(auto = true) {
     if (!ev) return;
     currentRunId = ev.runId;
     logEl.innerHTML = '';
-    roundEl.textContent = '1';
+    currentRound = 1;
+    roundLabel.textContent = t('ui.round', { n: currentRound });
     initiative = [];
     fireball = null;
     for (const k in characters) delete characters[k];
@@ -440,3 +492,8 @@ document.getElementById('speed').addEventListener('change', e => setSpeed(e.targ
 toggleGridBtn.addEventListener('click', () => {
   mapEl.classList.toggle('no-grid');
 });
+document.querySelectorAll('#lang-switch button').forEach(btn => {
+  btn.addEventListener('click', () => loadLang(btn.dataset.lang));
+});
+
+loadLang(lang);

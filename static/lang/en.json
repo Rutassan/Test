@@ -1,0 +1,16 @@
+{
+  "ui.play": "Play",
+  "ui.pause": "Pause",
+  "ui.restart": "Restart",
+  "ui.grid.toggle": "Toggle Grid",
+  "ui.speed": "Speed:",
+  "ui.sides.heroes": "Heroes",
+  "ui.sides.monsters": "Monsters",
+  "ui.round": "Round {n}",
+  "ui.victory.heroes": "Heroes win!",
+  "ui.victory.monsters": "Monsters win!",
+  "log.attack": "{a} hits {b} for {dmg}",
+  "log.heal": "{a} heals {b} for {amt}",
+  "log.death": "{a} dies",
+  "log.move": "{a} moves from {from} → {to}"
+}

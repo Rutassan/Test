@@ -1,15 +1,17 @@
 const heroes = [
-  {name: 'Warrior', emoji: '🛡️', hp: 30, maxHp: 30, attack: [4,8]},
-  {name: 'Mage', emoji: '🪄', hp: 20, maxHp: 20, attack: [5,10]}
+  {name: 'Warrior', emoji: '🛡️', hp: 30, maxHp: 30, attack: [4,8], poison:0, poisonTurns:0, shield:0, rage:0},
+  {name: 'Mage', emoji: '🪄', hp: 20, maxHp: 20, attack: [5,10], poison:0, poisonTurns:0, shield:0, rage:0}
 ];
 const monsters = [
-  {name: 'Goblin', emoji: '👺', hp: 15, maxHp: 15, attack: [3,6]},
-  {name: 'Orc', emoji: '🪓', hp: 25, maxHp: 25, attack: [2,7]}
+  {name: 'Goblin', emoji: '👺', hp: 15, maxHp: 15, attack: [3,6], poison:0, poisonTurns:0, shield:0, rage:0},
+  {name: 'Orc', emoji: '🪓', hp: 25, maxHp: 25, attack: [2,7], poison:0, poisonTurns:0, shield:0, rage:0}
 ];
 
 let speed = 1;
 let running = true;
 let round = 1;
+let tauntTarget = null;
+let initiativeQueue = [];
 
 const heroesDiv = document.getElementById('heroes');
 const monstersDiv = document.getElementById('monsters');
@@ -19,6 +21,7 @@ const logDiv = document.getElementById('log');
 const statusDiv = document.getElementById('status');
 const effectsSvg = document.getElementById('effects');
 const bannerDiv = document.getElementById('winner-banner');
+const initiativeDiv = document.getElementById('initiative');
 
 document.getElementById('play-pause').onclick = () => {
   running = !running;
@@ -45,7 +48,10 @@ function createCharElem(c) {
   const label = document.createElement('div');
   label.className = 'hp-label';
   div.appendChild(label);
-  c.dom = {div, hpBar: inner, label};
+  const statuses = document.createElement('div');
+  statuses.className = 'statuses';
+  div.appendChild(statuses);
+  c.dom = {div, hpBar: inner, label, statuses};
   updateChar(c);
   return div;
 }
@@ -53,11 +59,24 @@ function createCharElem(c) {
 function updateChar(c) {
   c.dom.hpBar.style.width = (c.hp / c.maxHp * 100) + '%';
   c.dom.label.textContent = `${c.hp}/${c.maxHp}`;
+  c.dom.statuses.textContent = '';
+  if (c.poisonTurns > 0) c.dom.statuses.textContent += '☠️';
+  if (c.shield > 0) c.dom.statuses.textContent += '🛡️';
+  if (c.rage > 0) c.dom.statuses.textContent += '💢';
 }
 
 function updatePanels() {
   heroPanel.textContent = heroes.map(h => `${h.name}: ${h.hp}/${h.maxHp}`).join('\n');
   monsterPanel.textContent = monsters.map(m => `${m.name}: ${m.hp}/${m.maxHp}`).join('\n');
+}
+
+function updateInitiative() {
+  initiativeDiv.innerHTML = '';
+  initiativeQueue.forEach(c => {
+    const span = document.createElement('span');
+    span.textContent = c.emoji;
+    initiativeDiv.appendChild(span);
+  });
 }
 
 function log(msg) {
@@ -95,6 +114,23 @@ function die(c) {
   c.dom.div.classList.add('dead');
 }
 
+function beginTurn(c) {
+  if (c.poisonTurns > 0 && c.hp > 0) {
+    c.hp = Math.max(c.hp - c.poison, 0);
+    c.poisonTurns--;
+    updateChar(c);
+    flash(c, 'hit');
+    damageNumber(c, c.poison);
+    log(`${c.name} suffers ${c.poison} poison. ${c.hp}/${c.maxHp}`);
+    if (c.hp <= 0) die(c);
+  }
+  if (c.rage > 0) c.rage--;
+  else if (c.hp > 0 && c.hp <= Math.floor(c.maxHp/3)) {
+    c.rage = 3;
+    log(`${c.name} enters Rage!`);
+  }
+}
+
 function lineBetween(a,b) {
   const rectA = a.dom.div.getBoundingClientRect();
   const rectB = b.dom.div.getBoundingClientRect();
@@ -113,16 +149,30 @@ function attack(attacker, target) {
   return new Promise(resolve => {
     attacker.dom.div.classList.add('active');
     let dmg = rand(attacker.attack[0], attacker.attack[1]);
+    if (attacker.rage > 0) dmg = Math.floor(dmg * 1.5);
     const crit = Math.random() < 0.2;
     if (crit) dmg *= 2;
     moveForward(attacker.dom.div, attacker.dom.div.parentElement === heroesDiv ? 20 : -20)
     .then(() => {
       lineBetween(attacker, target);
+      if (target.rage > 0) dmg = Math.floor(dmg * 1.5);
+      if (target.shield > 0) {
+        const absorbed = Math.min(target.shield, dmg);
+        dmg -= absorbed;
+        target.shield -= absorbed;
+        if (absorbed) log(`${target.name}'s shield absorbs ${absorbed}.`);
+      }
       target.hp = Math.max(target.hp - dmg, 0);
       updateChar(target);
       flash(target, 'hit');
       damageNumber(target, dmg);
       if (crit) critText(target);
+      if (Math.random() < 0.1 && target.hp > 0) {
+        target.poison = 2;
+        target.poisonTurns = 3;
+        updateChar(target);
+        log(`${target.name} is poisoned!`);
+      }
       if (target.hp <= 0) die(target);
       log(`${attacker.name} hits ${target.name} for ${dmg} dmg${crit ? ' (CRIT!)' : ''}. ${target.name} ${target.hp}/${target.maxHp}`);
       setTimeout(() => {
@@ -138,10 +188,16 @@ function heal(c) {
     c.dom.div.classList.add('active');
     const amt = rand(1,5);
     c.hp = Math.min(c.hp + amt, c.maxHp);
+    let msg = `${c.name} heals for ${amt}. ${c.hp}/${c.maxHp}`;
+    if (Math.random() < 0.3) {
+        const shield = rand(1,3);
+        c.shield += shield;
+        msg += ` and gains ${shield} shield`;
+    }
     updateChar(c);
     flash(c, 'heal');
     damageNumber(c, amt, true);
-    log(`${c.name} heals for ${amt}. ${c.hp}/${c.maxHp}`);
+    log(msg);
     setTimeout(() => {
       c.dom.div.classList.remove('active');
       resolve();
@@ -167,21 +223,44 @@ function showBanner(text) {
 async function gameLoop() {
   updatePanels();
   statusDiv.textContent = `Round ${round}`;
+  initiativeQueue = [...heroes.filter(h=>h.hp>0), ...monsters.filter(m=>m.hp>0)];
+  updateInitiative();
   for (const [side, enemies] of [[heroes, monsters], [monsters, heroes]]) {
     for (const actor of side) {
       if (!actor.hp || !running) await waitWhilePaused();
-      if (actor.hp <= 0) continue;
+      if (actor.hp <= 0) { initiativeQueue.shift(); updateInitiative(); continue; }
+      beginTurn(actor);
+      if (actor.hp <= 0) { initiativeQueue.shift(); updatePanels(); updateInitiative(); await delay(500/speed); continue; }
       const living = enemies.filter(e => e.hp > 0);
       if (!living.length) {
         showBanner(side === heroes ? 'Heroes win!' : 'Monsters win!');
         return;
       }
-      const target = living[Math.floor(Math.random() * living.length)];
-      if (Math.random() < 0.8) await attack(actor, target);
-      else await heal(actor);
+      let target;
+      if (side === monsters && tauntTarget && tauntTarget.hp > 0) target = tauntTarget;
+      else target = living[Math.floor(Math.random() * living.length)];
+      const r = Math.random();
+      if (actor.name === 'Warrior') {
+        if (r < 0.2) { tauntTarget = actor; log(`${actor.name} uses Taunt!`); }
+        else if (r < 0.9) await attack(actor, target);
+        else await heal(actor);
+      } else if (actor.name === 'Mage') {
+        if (r < 0.2) {
+          log(`${actor.name} casts Fireball!`);
+          const targets = living.slice().sort(() => 0.5 - Math.random()).slice(0, Math.min(2, living.length));
+          for (const t of targets) await attack(actor, t);
+        } else if (r < 0.9) await attack(actor, target);
+        else await heal(actor);
+      } else {
+        if (r < 0.8) await attack(actor, target);
+        else await heal(actor);
+      }
       updatePanels();
+      initiativeQueue.shift();
+      updateInitiative();
       await delay(500 / speed);
     }
+    if (side === monsters) tauntTarget = null;
   }
   round++;
   setTimeout(gameLoop, 10);

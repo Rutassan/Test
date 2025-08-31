@@ -74,6 +74,10 @@ function updateStatuses(name) {
   if (st.shield) html += '<span class="shield">🛡️</span>';
   if (st.rage) html += '<span class="rage">🔥</span>';
   if (st.taunt) html += '<span class="taunt">🛡️</span>';
+  if (st.aim) html += '<span class="aim">🎯</span>';
+  if (st.frenzy) html += '<span class="frenzy">⚡</span>';
+  if (st.hex) html += '<span class="hex">🌀</span>';
+  if (st.regen) html += '<span class="regen">♻️</span>';
   div.innerHTML = html;
   const charDiv = document.getElementById('char-' + name);
   if (st.shield) charDiv.classList.add('has-shield'); else charDiv.classList.remove('has-shield');
@@ -92,6 +96,18 @@ function shiftInitiative(name) {
     if (st.rage) {
       st.rage--;
       if (st.rage <= 0) delete st.rage;
+    }
+    if (st.aim) {
+      st.aim--;
+      if (st.aim <= 0) delete st.aim;
+    }
+    if (st.frenzy) {
+      st.frenzy--;
+      if (st.frenzy <= 0) delete st.frenzy;
+    }
+    if (st.hex) {
+      st.hex--;
+      if (st.hex <= 0) delete st.hex;
     }
     updateStatuses(name);
     renderInitiative();
@@ -139,8 +155,13 @@ function handleEvent(ev) {
       }
       break;
     case 'heal':
-      updateHp(ev.actor, ev.hp);
-      log(`${ev.actor} heals ${ev.amount}`, 'log-heal');
+      const tgt = ev.target || ev.actor;
+      updateHp(tgt, ev.hp);
+      if (ev.target && ev.target !== ev.actor) {
+        log(`${ev.actor} heals ${ev.target} for ${ev.amount}`, 'log-heal');
+      } else {
+        log(`${ev.actor} heals ${ev.amount}`, 'log-heal');
+      }
       shiftInitiative(ev.actor);
       break;
     case 'status': {
@@ -173,6 +194,29 @@ function handleEvent(ev) {
           showAbilityBanner();
           fireball = { actor: ev.actor, remaining: 2 };
           break;
+        case 'aim':
+          characters[name].statuses.aim = ev.turns || 1;
+          updateStatuses(name);
+          log(`${name} takes aim`, 'log-buff');
+          showAbilityBanner('Archer aims...');
+          shiftInitiative(ev.actor);
+          break;
+        case 'frenzy':
+          characters[name].statuses.frenzy = ev.turns;
+          updateStatuses(name);
+          log(`${name} is frenzied`, 'log-buff');
+          shiftInitiative(ev.actor);
+          break;
+        case 'hex':
+          characters[name].statuses.hex = ev.turns;
+          updateStatuses(name);
+          log(`${name} is hexed`, 'log-debuff');
+          shiftInitiative(ev.actor);
+          break;
+        case 'regen':
+          characters[name].statuses.regen = 1;
+          updateStatuses(name);
+          break;
       }
       break;
     }
@@ -186,6 +230,12 @@ function handleEvent(ev) {
       break;
     case 'death':
       log(`${ev.target} dies`, 'log-death');
+      break;
+    case 'passive_tick':
+      if (ev.status === 'regen') {
+        updateHp(ev.target, ev.hp);
+        log(`${ev.target} regenerates ${ev.amount}`, 'log-heal');
+      }
       break;
     case 'end':
       log(`${ev.winner} win!`);

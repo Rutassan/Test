@@ -9,6 +9,8 @@ let speed = 1;
 const characters = {};
 let initiative = [];
 let fireball = null;
+let currentRunId = null;
+let nextAbortController = null;
 
 function log(msg, cls = '') {
   const div = document.createElement('div');
@@ -93,7 +95,7 @@ function shiftInitiative(name) {
 }
 
 function handleEvent(ev) {
-  if (!ev) return;
+  if (!ev || (ev.runId && ev.runId !== currentRunId)) return;
   switch (ev.type) {
     case 'start':
       setup(heroesEl, ev.heroes);
@@ -192,37 +194,61 @@ function handleEvent(ev) {
 }
 
 function fetchNext() {
-  fetch('/next').then(r => r.json()).then(ev => {
-    if (!ev || !ev.type) { pause(); return; }
-    handleEvent(ev);
-    if (ev.type === 'end') pause();
-  });
+  if (!currentRunId) return;
+  nextAbortController = new AbortController();
+  fetch('/next?runId=' + encodeURIComponent(currentRunId), { signal: nextAbortController.signal })
+    .then(r => r.json())
+    .then(ev => {
+      if (!ev || ev.runId !== currentRunId) { pause(); return; }
+      handleEvent(ev);
+      if (ev.type === 'end') pause();
+    })
+    .catch(() => {});
 }
 
-function start() {
+function start(auto = true) {
+  if (nextAbortController) nextAbortController.abort();
   fetch('/start').then(r => r.json()).then(ev => {
+    if (!ev) return;
+    currentRunId = ev.runId;
     logEl.innerHTML = '';
-    roundEl.textContent = '0';
+    roundEl.textContent = '1';
     initiative = [];
     fireball = null;
+    for (const k in characters) delete characters[k];
+    document.getElementById('banner')?.remove();
+    if (!auto) {
+      speed = 1;
+      document.getElementById('speed').value = '1';
+    }
     handleEvent(ev);
-    resume();
+    if (auto) {
+      resume();
+    } else {
+      document.getElementById('play').disabled = false;
+      document.getElementById('pause').disabled = true;
+    }
   });
 }
 
 function resume() {
   if (timer) clearInterval(timer);
   timer = setInterval(fetchNext, 1000 / speed);
+  document.getElementById('play').disabled = true;
+  document.getElementById('pause').disabled = false;
 }
 
 function pause() {
   if (timer) clearInterval(timer);
   timer = null;
+  document.getElementById('pause').disabled = true;
+  document.getElementById('play').disabled = false;
 }
 
 function restart() {
   pause();
-  start();
+  if (nextAbortController) nextAbortController.abort();
+  start(false);
 }
 
 function setSpeed(s) {
